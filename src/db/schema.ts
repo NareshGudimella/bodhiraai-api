@@ -840,6 +840,9 @@ export const lessons = pgTable(
     thumbnail: citext('thumbnail'),
     content_url: citext('content_url'),
     content_body: text('content_body'),
+    // security: not in legacy (Node-only column): the VdoCipher video id of an
+    // uploaded lesson video. When set, content_url is null.
+    video_id: text('video_id'),
     duration_sec: bigint('duration_sec', { mode: 'number' })
       .notNull()
       .default(0),

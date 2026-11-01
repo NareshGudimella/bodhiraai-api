@@ -5,6 +5,7 @@ import { Public } from '../common/decorators/auth.decorators';
 import { Client, type ClientInfo } from '../common/decorators/client.decorator';
 import { RateLimit } from '../common/decorators/rate-limit';
 import { envString } from '../billing/gateways';
+import { vdoCipherApiBase } from '../video/vdocipher.client';
 
 /** config('services.vdocipher.video_id'). */
 const DEFAULT_VIDEO = () =>
@@ -69,7 +70,8 @@ export class VideoController {
     }
     try {
       const res = await fetch(
-        `https://dev.vdocipher.com/api/videos/${videoId}/otp`,
+        // VDOCIPHER_API_BASE (not in legacy) lets tests use a local stub.
+        `${vdoCipherApiBase()}/videos/${videoId}/otp`,
         {
           method: 'POST',
           headers: {

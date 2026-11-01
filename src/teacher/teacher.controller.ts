@@ -13,11 +13,13 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser, Roles } from '../common/decorators/auth.decorators';
 import { ok } from '../common/http/api-response';
+import { ValidationFailed } from '../common/http/api.exception';
 import { iso8601, parseLaravelDate, routeId } from '../common/http/laravel';
 import { laravelValidate } from '../common/http/laravel-validator';
 import { Role } from '../common/roles';
 import { DB, type Db } from '../db/db';
 import type { users } from '../db/types';
+import { ForgedFileUrl, unsignFileUrl } from '../storage/file-url';
 import { StorageService } from '../storage/storage.service';
 import type { IncomingFile } from '../storage/upload-rules';
 import {
@@ -164,8 +166,23 @@ export class TeacherController {
     await this.teachers.guardClass(user, c);
     if (attachment) {
       data.attachment_url = await storeOrReject('attachment', () =>
-        this.storage.store(attachment, 'doc', `assignments/${c.id}`),
+        // security: not in legacy: private, served by signed link
+        this.storage.store(attachment, 'doc', `assignments/${c.id}`, {
+          private: true,
+        }),
       );
+    } else if ('attachment_url' in data) {
+      // security: not in legacy: our own signed link sent back is stored as
+      // `/files/<key>`; a forged one fails like Laravel's `url` rule.
+      try {
+        data.attachment_url = unsignFileUrl(data.attachment_url);
+      } catch (e) {
+        if (!(e instanceof ForgedFileUrl)) throw e;
+        throw ValidationFailed.field(
+          'attachment_url',
+          'The attachment url field must be a valid URL.',
+        );
+      }
     }
     const due =
       typeof data.due_date === 'string'

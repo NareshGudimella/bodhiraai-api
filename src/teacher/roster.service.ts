@@ -26,6 +26,7 @@ import { ParentService } from '../parent/parent.service';
 import { strRandom, strSlug } from '../storage/laravel-str';
 import { StorageService } from '../storage/storage.service';
 import { TeacherService } from './teacher.service';
+import { signedFileUrl } from '../storage/file-url';
 
 export interface StudentInput {
   name: string;
@@ -289,7 +290,7 @@ export class RosterService {
       parents: parents.map((p) => ({
         id: p.users_parent_student_parent_idTousers.id,
         name: p.users_parent_student_parent_idTousers.name,
-        avatar: p.users_parent_student_parent_idTousers.avatar,
+        avatar: signedFileUrl(p.users_parent_student_parent_idTousers.avatar), // security: not in legacy: signed private-file link
         relation: p.relation,
         phone: p.users_parent_student_parent_idTousers.phone,
         email: p.users_parent_student_parent_idTousers.email,

@@ -41,6 +41,7 @@ import { strRandom, strSlug } from '../storage/laravel-str';
 import { classLabel } from '../teacher/teacher.service';
 import { TokenService } from '../auth/token.service';
 import { RosterService } from '../teacher/roster.service';
+import { signedFileUrl } from '../storage/file-url';
 
 const MONTHS = [
   'Jan',
@@ -484,7 +485,7 @@ export class AdminService {
         roll_no: r.roll_no,
         // not in legacy API: the Blade class page shows grade and avatar
         grade: r.users.grade,
-        avatar: r.users.avatar,
+        avatar: signedFileUrl(r.users.avatar), // security: not in legacy: signed private-file link
       })),
       subjects: c.class_subject.map((r) => ({
         id: r.subjects.id,

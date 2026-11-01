@@ -39,11 +39,13 @@ const USER_JSON = {
     phone_verified_at: 'datetime',
     last_login_at: 'datetime',
     dob: 'date',
+    avatar: 'file', // security: not in legacy (signed private-file link)
   },
 } as const;
 
 const SCHOOL_JSON = {
   casts: {
+    logo: 'file', // security: not in legacy (signed private-file link)
     plan_expires_at: 'date',
     settings: 'array',
     max_teachers: 'int',

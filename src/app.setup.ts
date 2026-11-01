@@ -3,6 +3,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { raw } from 'express';
 import type { ServerResponse } from 'node:http';
 import helmet from 'helmet';
+import { filesHandler } from './storage/files.handler';
 import { StorageService } from './storage/storage.service';
 import { ApiExceptionFilter } from './common/filters/api-exception.filter';
 import { apiValidationPipe } from './common/http/validation';
@@ -37,6 +38,9 @@ export function configureApp(app: NestExpressApplication) {
       setHeaders: (res: ServerResponse) =>
         res.setHeader('X-Content-Type-Options', 'nosniff'),
     });
+    // security: not in legacy. Private files behind signed links (file-url.ts);
+    // production serves /files/* from the edge Worker instead.
+    app.use('/files', filesHandler());
   }
   app.enableCors({
     origin: (process.env.CORS_ORIGINS ?? '').split(',').filter(Boolean),

@@ -3,6 +3,7 @@ import { eloquentRow } from './laravel';
 /**
  * Model::toArray() settings ($casts, $hidden) per table, for endpoints that
  * return raw Eloquent models. Mirror the legacy app/Models/* when adding tables.
+ * The `file` casts (security: not in legacy) sign private-file columns.
  */
 const MODELS = {
   users: {
@@ -12,10 +13,12 @@ const MODELS = {
       phone_verified_at: 'datetime',
       last_login_at: 'datetime',
       dob: 'date',
+      avatar: 'file',
     },
   },
   schools: {
     casts: {
+      logo: 'file',
       plan_expires_at: 'date',
       settings: 'array',
       max_teachers: 'int',
@@ -34,12 +37,31 @@ const MODELS = {
       ends_at: 'datetime',
     },
   },
-  assignments: { casts: { due_date: 'datetime', is_published: 'bool' } },
+  assignments: {
+    casts: {
+      due_date: 'datetime',
+      is_published: 'bool',
+      attachment_url: 'file',
+    },
+  },
   assignment_submissions: {
-    casts: { submitted_at: 'datetime', graded_at: 'datetime' },
+    casts: {
+      submitted_at: 'datetime',
+      graded_at: 'datetime',
+      file_url: 'file',
+    },
   },
   attendance: { casts: { date: 'date' } },
-  lessons: { casts: { is_free: 'bool', is_published: 'bool' } },
+  lessons: {
+    // video_id (Node-only column) stays internal; clients get `playback`.
+    hidden: ['video_id'],
+    casts: {
+      is_free: 'bool',
+      is_published: 'bool',
+      thumbnail: 'file',
+      content_url: 'file',
+    },
+  },
   questions: { casts: { options: 'array', correct_answer: 'array' } },
   syllabi: { casts: { is_active: 'bool' } },
   plans: {

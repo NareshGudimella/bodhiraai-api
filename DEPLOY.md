@@ -78,7 +78,7 @@ sudo systemctl enable --now redis6
 
 `NODE_ENV`, `PORT=8080` and `NODE_EXTRA_CA_CERTS` come from `.ebextensions/01-bodhira.config`. Set the rest on the environment, never in files.
 
-**Secrets** (`DATABASE_URL`, `PROXY_SECRET`, `REDIS_URL`, `R2_SECRET_ACCESS_KEY`, gateway and mail secrets, `ANTHROPIC_API_KEY`): keep them in Secrets Manager or Parameter Store, and reference them from the environment. Beanstalk's `aws:elasticbeanstalk:application:environmentsecrets` namespace does this; check the current Beanstalk docs before relying on it. Plain environment properties (`eb setenv`) are visible to anyone with console access, so use them only for non-secret values.
+**Secrets** (`DATABASE_URL`, `PROXY_SECRET`, `REDIS_URL`, `R2_SECRET_ACCESS_KEY`, `FILE_URL_SECRET`, `VDOCIPHER_API_SECRET`, gateway and mail secrets, `ANTHROPIC_API_KEY`): keep them in Secrets Manager or Parameter Store, and reference them from the environment. Beanstalk's `aws:elasticbeanstalk:application:environmentsecrets` namespace does this; check the current Beanstalk docs before relying on it. Plain environment properties (`eb setenv`) are visible to anyone with console access, so use them only for non-secret values.
 
 
 | Variable | Value |
@@ -90,12 +90,17 @@ sudo systemctl enable --now redis6
 | `TRUST_PROXY` | `loopback` (Beanstalk's Nginx). The real visitor address comes from `X-Client-IP` |
 | `CORS_ORIGINS`, `WEB_URL`, `PUBLIC_URL` | `https://bodhiraai.com` |
 | `STORAGE_DRIVER` | `r2`, plus every `R2_*` variable (`R2_PUBLIC_URL` is the public custom domain of the uploads bucket) |
+| `R2_PRIVATE_BUCKET` | The **private** bucket (no public domain, no `r2.dev` access): invoices, and every private upload (avatars, school logos, lesson PDFs and thumbnails, assignment attachments and submissions). The R2 API token needs read/write on it and on the uploads bucket (the cut-over script copies between them). Bind the same bucket to the Worker as `PRIVATE_FILES` |
+| `FILE_URL_SECRET` | **Required in production; the API refuses to start without it** (32+ characters, `openssl rand -base64 48`). Signs the short-lived `/files/<key>?exp&sig` links. **Use the same value** in the Worker (`wrangler secret put FILE_URL_SECRET`), which serves `/files/*` from `PRIVATE_FILES`. Rotating it breaks links already handed out (they last `FILE_URL_TTL`) |
+| `FILES_BASE_URL` | **Required in production** (the API refuses to start without it): `https://bodhiraai.com`, the origin whose Worker serves `/files/*` |
+| `FILE_URL_TTL` | Optional, seconds (default `1800`, max `86400`) |
 | `BILLING_GATEWAY`, `RAZORPAY_*`, `STRIPE_*` | Copy the legacy values. Live checkout needs `RAZORPAY_KEY_SECRET`. `RAZORPAY_WEBHOOK_SECRET` / `STRIPE_WEBHOOK_SECRET` are required for webhooks (without them the webhook answers a generic 400) |
 | `BILLING_DEMO` | **Leave unset.** Without gateway keys, checkout used to activate plans with no payment (demo mode). With `NODE_ENV=production` that now answers 503 `payment_unavailable` unless `BILLING_DEMO=1` |
 | `OTP_LOGIN_ENABLED` | **Leave unset.** Phone OTP sign-in (`/auth/otp/send`, `/auth/otp/verify`) is off in production by default (503 `otp_unavailable`) because no SMS provider is wired and codes would never reach their owners. Set `1` only once an SMS provider sends the code. Elsewhere it defaults to on |
 | `MAIL_SETTINGS_KEY` | **Required in production.** 32 random bytes (`openssl rand -base64 32`) that encrypt the SMTP password saved in the super admin panel (Mail settings). Generate once and keep it: with a different key the saved password can't be read and must be entered again. The app starts without it (a warning is logged) but the password can't be saved |
 | `MAIL_*` | **Optional fallback.** Outgoing mail is configured in the super admin panel (`/super/mail-settings`, table `mail_settings`). Until a row is saved there, the API uses these variables, so copy the legacy values for the first deploy and then switch to the panel. In production only `MAIL_MAILER=smtp` with a `MAIL_HOST` sends; otherwise sending fails with a logged error (the app still starts, and the message is never logged). The settings are cached for up to a minute per instance |
-| `ANTHROPIC_*`, `VDOCIPHER_*`, `APP_NAME`, `APP_ENV` | Copy the legacy values |
+| `ANTHROPIC_*`, `APP_NAME`, `APP_ENV` | Copy the legacy values |
+| `VDOCIPHER_API_SECRET`, `VDOCIPHER_VIDEO_ID` | Copy the legacy values. The secret is **required for lesson videos**: without it, production refuses lesson video uploads (503) and playback OTPs (503), and logs a warning at start. Keep it in Secrets Manager. Leave `VDOCIPHER_API_BASE` unset (tests only); `VDOCIPHER_OTP_TTL` defaults to 300 |
 
 
 ## 6. Deploy

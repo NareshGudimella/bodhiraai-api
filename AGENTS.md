@@ -16,7 +16,9 @@ NestJS 11 + Drizzle ORM (PostgreSQL) port of the legacy Laravel API. It serves `
 | `src/notification/` | `NotificationService.notifyMany()` writes Laravel database-channel rows; `/me/notifications` endpoints |
 | `src/teacher/`, `src/parent/`, `src/chat/` | Phase 3 ports (`TeacherService`, `ParentService`, chat) |
 | `src/common/http/eloquent.ts` | `toModel(table, row, relations)` / `withPivot(...)`: `Model::toArray()` for raw-model responses (per-table casts and hidden fields); `dirtyFields()` for `fill()->save()` (write only changed columns, keep `updated_at` otherwise); `phpBool()` |
-| `src/storage/` | `StorageService` (R2 / local), upload rules (`FileUploadService` port, content sniffing), `validateWithFile` / `storeOrReject` / `uploadOptions` for multipart routes |
+| `src/storage/` | `StorageService` (R2 / local), upload rules (`FileUploadService` port, content sniffing), `validateWithFile` / `storeOrReject` / `uploadOptions` for multipart routes. `file-url.ts`: signed private-file links (`signedFileUrl`, `unsignFileUrl`); `files.handler.ts`: local `/files/*` |
+| `src/video/` | Not in legacy: `VdoCipherClient` (lesson video upload, OTP, import, delete), `lessonPlayback()`, `GET /lessons/:id/playback` |
+| `src/db/make-files-private.ts` | Cut-over script `npm run files:make-private` (dry run; `--apply`, `--delete-source`) |
 | `src/account/` | `/me/profile`, `/me/password` (all roles) |
 | `src/admin/`, `src/super/` | Phase 4 ports (`AdminService`, `SuperAdminService`). `guardSameSchool()` for cross-school 403s; soft-deleted schools are filtered with `LIVE_SCHOOL` |
 | `src/admin/school-web.controller.ts`, `src/super/catalogue.controller.ts` | Phase 4b: endpoints for legacy web-only features (parent links, syllabus opt-in; syllabi, plans, enquiries) |
@@ -56,6 +58,8 @@ NestJS 11 + Drizzle ORM (PostgreSQL) port of the legacy Laravel API. It serves `
 - Check a new port against the running legacy API before calling it done. List any additive or intentional differences in the migration plan.
 - Table, relation and row-type names follow the legacy table names (`users`, `schools`, …); relation names are the old Prisma include names (`post.users`, `sub.schools`).
 - Files that must not be public (invoices) go through `storage.putPrivate()`/`getPrivate()` and are served by an endpoint that checks ownership.
+- **Private columns** (`users.avatar`, `schools.logo`, `lessons.content_url` and `thumbnail`, `assignments.attachment_url`, `assignment_submissions.file_url`, `live_classes.recording_url`): uploads use `{ private: true }` (`store`/`storeCloud`/`putBytes`), which stores `/files/<key>` in the column. Never put a signed URL in the database. Every response that includes one of these columns signs it: `toModel`/`eloquentRow` do it through the `file` cast in `eloquent.ts`; hand-written serialisers call `signedFileUrl()`. Sign by column, never by walking a response for field names (user-editable JSON could then get any key signed). Where a client may send one back (edit forms), pass it through `unsignFileUrl()` and answer 422 on `ForgedFileUrl`. Only marketing/CMS uploads stay public.
+- Lesson responses carry `playback` (`lessonPlayback()`); `lessons.video_id` is never returned.
 - Use `@Client()` for anything legacy reads from `$request->ip()`, `userAgent()` or the Referer (audit rows, leads). The web forwards these; never read `req.ip` directly. Behind Cloudflare the address comes from `X-Client-IP` plus `PROXY_SECRET` (`common/http/client-ip.ts`).
 - Production runs 1–5 instances (Elastic Beanstalk; see [DEPLOY.md](DEPLOY.md)). Keep no per-process state: rate-limit counters go to Redis (`REDIS_URL`), and files go to R2.
 - Legacy bugs kept for parity sit behind a named constant or a comment that says so (see the migration plan's "Known legacy bugs"), so the fix is one deliberate change.
@@ -73,6 +77,7 @@ Deliberate differences from legacy, each labelled in code; keep them when portin
 - **Mail:** in production only a complete `smtp` configuration (admin panel row, else `MAIL_*`) sends; otherwise `send()` logs an error (never the message) and throws. The app still starts. `mail_settings` is Node-only; the SMTP password is write-only (`password_set` in responses, blank on save keeps it).
 - **AI tutor:** the budget is reserved atomically per user and metered on Claude's reported usage; history is capped at 8000 characters.
 - **Rate limits:** `RateLimit(limit, key, ttlMs)`; `RateLimiter.hit()` adds a second limit (per phone, per IP per hour). Redis errors fall back to in-memory counting.
+- **Protected media (2026-11-01):** private uploads live in the private bucket and are reachable only by signed links (`<FILES_BASE_URL>/files/<key>?exp&sig`, HMAC with `FILE_URL_SECRET`, `FILE_URL_TTL`); keys under `invoices/`, with `..`, `\`, empty segments or a leading `/` are never signed or served. **Production refuses to start without `FILE_URL_SECRET` (32+ chars) and `FILES_BASE_URL`**; elsewhere a development secret is used. Lesson videos go to VdoCipher (`VDOCIPHER_API_SECRET`, `VDOCIPHER_API_BASE`, `VDOCIPHER_OTP_TTL`); without a secret production refuses video uploads, other environments store them privately. `GET /lessons/:id/playback` allows students who may open the lesson (paywall 402 first) and teachers who teach its subject in their school; everyone else 403. Tests: `src/storage/file-url.spec.ts`, `test/protected-media.e2e-spec.ts` (VdoCipher stubbed locally).
 
 ## Commands
 
@@ -84,9 +89,10 @@ npm test                # unit (src/**/*.spec.ts)
 npm run test:e2e        # e2e (test/), needs DATABASE_URL with the seeded schema
 npm run db:generate     # after editing src/db/schema.ts → drizzle/NNNN_*.sql
 npm run db:migrate      # apply migrations to DATABASE_URL
+npm run files:make-private  # cut-over: dry run; --apply to move private files / import videos
 ```
 
-`.env`: copy `.env.example`. Local database: `createdb bodhira`, then `npm run db:migrate`. Uploads use `STORAGE_DRIVER=local` in development (files in `storage/uploads`, served at `/uploads`; private files in `storage/private`, not served); production sets `STORAGE_DRIVER=r2` with the `R2_*` variables, including `R2_PRIVATE_BUCKET` for invoices. Without gateway keys, billing runs in demo mode like legacy.
+`.env`: copy `.env.example`. Local database: `createdb bodhira`, then `npm run db:migrate`. Uploads use `STORAGE_DRIVER=local` in development (files in `storage/uploads`, served at `/uploads`; private files in `storage/private`, served only by signed link at `/files/*`, invoices never); production sets `STORAGE_DRIVER=r2` with the `R2_*` variables, including `R2_PRIVATE_BUCKET` for invoices and private uploads (the edge Worker serves `/files/*`). Signed links: `FILE_URL_SECRET`, `FILES_BASE_URL`, `FILE_URL_TTL`. Lesson videos: `VDOCIPHER_API_SECRET`, `VDOCIPHER_API_BASE`, `VDOCIPHER_OTP_TTL`. Without gateway keys, billing runs in demo mode like legacy.
 
 ## Don'ts
 

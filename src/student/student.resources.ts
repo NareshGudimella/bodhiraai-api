@@ -6,6 +6,8 @@ import type {
   subjects,
 } from '../db/types';
 import { iso8601, jsonCast } from '../common/http/laravel';
+import { signedFileUrl } from '../storage/file-url';
+import { lessonPlayback } from '../video/lesson-playback';
 
 /** Ports of App\Http\Resources\{Subject,Chapter,Lesson,Quiz}Resource. */
 
@@ -60,8 +62,11 @@ export function lessonResource(
     title: l.title,
     slug: l.slug,
     type: l.type,
-    thumbnail: l.thumbnail,
-    content_url: l.content_url,
+    // security: not in legacy: private files come out as signed links, and
+    // `playback` says whether to fetch a VdoCipher OTP (/lessons/:id/playback).
+    thumbnail: signedFileUrl(l.thumbnail),
+    content_url: signedFileUrl(l.content_url),
+    playback: lessonPlayback(l),
     ...(opts.withBody && { content_body: l.content_body }),
     duration_sec: l.duration_sec,
     duration_label: formatDuration(l.duration_sec),

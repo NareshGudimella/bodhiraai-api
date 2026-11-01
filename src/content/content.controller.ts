@@ -15,6 +15,7 @@ import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { eq } from 'drizzle-orm';
 import { CurrentUser, Roles } from '../common/decorators/auth.decorators';
 import { ok } from '../common/http/api-response';
+import { ApiException, ValidationFailed } from '../common/http/api.exception';
 import { toModel } from '../common/http/eloquent';
 import { modelNotFound, routeId } from '../common/http/laravel';
 import { laravelValidate } from '../common/http/laravel-validator';
@@ -28,16 +29,31 @@ import {
   quizzes as quizzesTable,
   subjects as subjectsTable,
 } from '../db/schema';
-import type { users } from '../db/types';
+import type { lessons, users } from '../db/types';
+import { ForgedFileUrl, unsignFileUrl } from '../storage/file-url';
 import { strRandom } from '../storage/laravel-str';
 import { StorageService } from '../storage/storage.service';
-import type { IncomingFile } from '../storage/upload-rules';
+import { checkUpload, type IncomingFile } from '../storage/upload-rules';
 import {
   storeOrReject,
   uploadOptions,
   validateWithFiles,
 } from '../storage/uploads';
+import { lessonPlayback } from '../video/lesson-playback';
+import { VdoCipherClient, VdoCipherError } from '../video/vdocipher.client';
 import { ContentService } from './content.service';
+
+/** security: not in legacy: lessons as returned here, with private files signed and `playback`. */
+const lessonModel = (l: lessons, relations: Record<string, unknown> = {}) =>
+  toModel('lessons', l, { playback: lessonPlayback(l), ...relations });
+
+/** Where an uploaded lesson file ended up: a stored value, or a VdoCipher video. */
+type StoredMedia =
+  | { content_url: string; video_id: null }
+  | {
+      content_url: null;
+      video_id: string;
+    };
 
 type Files = Partial<Record<'content_file' | 'thumbnail_file', IncomingFile[]>>;
 
@@ -79,6 +95,7 @@ export class ContentController {
     private readonly content: ContentService,
     @Inject(DB) private readonly db: Db,
     private readonly storage: StorageService,
+    private readonly vdo: VdoCipherClient,
   ) {}
 
   private async subject(raw: string) {
@@ -168,7 +185,15 @@ export class ContentController {
   ) {
     const chapter = await this.chapter(raw);
     this.content.guardSubject(user, chapter.subjects);
+    // security: not in legacy: the cascade removes the lessons; their VdoCipher
+    // videos are deleted too (best-effort).
+    const videos = await this.db.query.lessons.findMany({
+      where: eq(lessonsTable.chapter_id, chapter.id),
+      columns: { video_id: true },
+      orderBy: [asc(lessonsTable.id)],
+    });
     await this.content.deleteChapter(chapter);
+    await this.vdo.deleteBestEffort(...videos.map((v) => v.video_id));
     return ok({ subject_id: chapter.subject_id }, 'Chapter deleted.');
   }
 
@@ -183,7 +208,7 @@ export class ContentController {
     return ok({
       chapter: toModel('chapters', chapter, {
         subject: toModel('subjects', subject),
-        lessons: lessons.map((l) => toModel('lessons', l)),
+        lessons: lessons.map((l) => lessonModel(l)),
       }),
     });
   }
@@ -202,6 +227,7 @@ export class ContentController {
       `lessons/${chapterId}/thumbnails/auto-${strRandom(10)}.${ext}`,
       bytes,
       `image/${m[1]}`,
+      { private: true }, // security: not in legacy
     );
   }
 
@@ -236,16 +262,72 @@ export class ContentController {
     );
   }
 
-  private storeMedia(file: IncomingFile, type: unknown, folder: string) {
-    return storeOrReject('content_file', () =>
-      this.storage.store(file, type === 'pdf' ? 'pdf' : 'video', folder),
+  /**
+   * security: not in legacy. Uploaded PDFs/files go to private storage
+   * (`/files/<key>`); videos go to VdoCipher. Without VDOCIPHER_API_SECRET a
+   * video is refused in production (503) and stored privately elsewhere.
+   */
+  private async storeMedia(
+    file: IncomingFile,
+    type: unknown,
+    folder: string,
+    title: string,
+  ): Promise<StoredMedia> {
+    const category = type === 'pdf' ? 'pdf' : 'video';
+    if (category === 'video' && this.vdo.configured()) {
+      const { contentType } = await storeOrReject('content_file', () =>
+        Promise.resolve(checkUpload(file, 'video')),
+      );
+      try {
+        const videoId = await this.vdo.upload(
+          file.buffer,
+          file.originalname,
+          contentType,
+          title,
+        );
+        return { content_url: null, video_id: videoId };
+      } catch (e) {
+        if (!(e instanceof VdoCipherError)) throw e;
+        throw new ApiException(
+          'The video could not be uploaded. Please try again.',
+          502,
+        );
+      }
+    }
+    if (category === 'video' && process.env.NODE_ENV === 'production')
+      throw new ApiException('Video uploads are not configured.', 503);
+    const url = await storeOrReject('content_file', () =>
+      this.storage.store(file, category, folder, { private: true }),
     );
+    return { content_url: url, video_id: null };
   }
 
   private storeThumb(file: IncomingFile, folder: string) {
     return storeOrReject('thumbnail_file', () =>
-      this.storage.store(file, 'image', `${folder}/thumbnails`),
+      this.storage.store(file, 'image', `${folder}/thumbnails`, {
+        private: true, // security: not in legacy
+      }),
     );
+  }
+
+  /**
+   * security: not in legacy. Our own signed links sent back by the edit form
+   * (`content_url`, `thumbnail`) are stored as `/files/<key>` again; a forged
+   * one is a validation error, worded like Laravel's `url` rule.
+   */
+  private unsignFields(data: Record<string, unknown>) {
+    const errors: Record<string, string[]> = {};
+    for (const field of ['content_url', 'thumbnail']) {
+      try {
+        if (field in data) data[field] = unsignFileUrl(data[field]);
+      } catch (e) {
+        if (!(e instanceof ForgedFileUrl)) throw e;
+        errors[field] = [
+          `The ${field.replace(/_/g, ' ')} field must be a valid URL.`,
+        ];
+      }
+    }
+    if (Object.keys(errors).length) throw new ValidationFailed(errors);
   }
 
   @Post('chapters/:chapter/lessons')
@@ -267,12 +349,16 @@ export class ContentController {
     const { subjects: subject, ...chapter } = await this.chapter(raw);
     this.content.guardSubject(user, subject);
     const data = await this.validateLesson(body, files, false);
+    this.unsignFields(data);
     const folder = `lessons/${chapter.id}`;
     const media = files.content_file?.[0];
     const thumb = files.thumbnail_file?.[0];
 
     if (media)
-      data.content_url = await this.storeMedia(media, data.type, folder);
+      Object.assign(
+        data,
+        await this.storeMedia(media, data.type, folder, data.title as string),
+      );
     // Thumbnail precedence: explicit upload → explicit URL → auto-extracted from video.
     if (thumb) {
       data.thumbnail = await this.storeThumb(thumb, folder);
@@ -294,7 +380,7 @@ export class ContentController {
     this.content.guardSubject(user, chapter?.subjects ?? null);
     const { subjects: subject, ...ch } = chapter;
     return ok({
-      lesson: toModel('lessons', lesson, {
+      lesson: lessonModel(lesson, {
         chapter: toModel('chapters', ch, {
           subject: toModel('subjects', subject),
         }),
@@ -321,18 +407,30 @@ export class ContentController {
     const { chapters: chapter, ...lesson } = await this.lesson(raw);
     this.content.guardSubject(user, chapter?.subjects ?? null);
     const data = await this.validateLesson(body, files, true);
+    this.unsignFields(data);
     const folder = `lessons/${lesson.chapter_id}`;
     const media = files.content_file?.[0];
     const thumb = files.thumbnail_file?.[0];
 
     // Replacement video / PDF: store the new file, then delete the old one.
     if (media) {
-      const url = await this.storeMedia(media, data.type, folder);
+      const stored = await this.storeMedia(
+        media,
+        data.type,
+        folder,
+        (data.title as string | undefined) ?? lesson.title,
+      );
       await this.storage.delete(lesson.content_url);
-      data.content_url = url;
+      // security: not in legacy: the replaced VdoCipher video goes too (best-effort).
+      await this.vdo.deleteBestEffort(lesson.video_id);
+      Object.assign(data, stored);
+    } else if (data.content_url) {
+      // A typed URL replaces a VdoCipher video (security: not in legacy).
+      await this.vdo.deleteBestEffort(lesson.video_id);
+      data.video_id = null;
     } else {
       // `$request->filled('content_url')`: keep the existing media unless a URL was given.
-      data.content_url = data.content_url ?? lesson.content_url;
+      data.content_url = lesson.content_url;
     }
 
     // Thumbnail precedence: upload → auto-extracted frame → typed URL → existing.
@@ -363,6 +461,8 @@ export class ContentController {
     const { chapters: chapter, ...lesson } = await this.lesson(raw);
     this.content.guardSubject(user, chapter?.subjects ?? null);
     await this.content.deleteLesson(lesson);
+    // security: not in legacy: the lesson's VdoCipher video goes too (best-effort).
+    await this.vdo.deleteBestEffort(lesson.video_id);
     return ok({ chapter_id: lesson.chapter_id }, 'Lesson deleted.');
   }
 

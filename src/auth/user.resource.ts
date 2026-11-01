@@ -1,5 +1,6 @@
 import type { schools, users } from '../db/types';
 import { roleLabel } from '../common/roles';
+import { signedFileUrl } from '../storage/file-url';
 
 /** Mirrors App\Http\Resources\UserResource. */
 export function userResource(user: users & { schools?: schools | null }) {
@@ -10,7 +11,7 @@ export function userResource(user: users & { schools?: schools | null }) {
     phone: user.phone,
     role: user.role,
     role_label: roleLabel(user.role),
-    avatar: user.avatar,
+    avatar: signedFileUrl(user.avatar), // security: not in legacy: signed private-file link
     grade: user.grade,
     gender: user.gender,
     dob: user.dob ? user.dob.toISOString().slice(0, 10) : null,
@@ -23,7 +24,7 @@ export function userResource(user: users & { schools?: schools | null }) {
             id: Number(user.schools.id),
             name: user.schools.name,
             code: user.schools.code,
-            logo: user.schools.logo,
+            logo: signedFileUrl(user.schools.logo), // security: not in legacy: signed private-file link
           }
         : null,
     }),

@@ -117,7 +117,8 @@ export class AccountController {
     await assertPhoneFree(this.db, data.phone, user.id);
     const url = avatar
       ? await storeOrReject('avatar', () =>
-          this.storage.storeCloud(avatar, 'image'),
+          // security: not in legacy: private, served by signed link
+          this.storage.storeCloud(avatar, 'image', { private: true }),
         )
       : undefined;
 

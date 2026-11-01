@@ -39,6 +39,7 @@ import {
   validateWithFile,
 } from '../storage/uploads';
 import { classLabel } from '../teacher/teacher.service';
+import { signedFileUrl } from '../storage/file-url';
 
 const webUrl = (path: string) =>
   `${(process.env.WEB_URL ?? 'http://localhost:3000').replace(/\/$/, '')}${path}`;
@@ -49,7 +50,7 @@ const submissionJson = (s: assignment_submissions | undefined) =>
         id: s.id,
         status: s.status,
         note: s.note,
-        file_url: s.file_url,
+        file_url: signedFileUrl(s.file_url), // security: not in legacy: signed private-file link
         score: s.score,
         feedback: s.feedback,
         submitted_at: iso8601(s.submitted_at),
@@ -156,7 +157,7 @@ export class StudentAssignmentsController {
         id: a.id,
         title: a.title,
         description: a.description,
-        attachment_url: a.attachment_url,
+        attachment_url: signedFileUrl(a.attachment_url), // security: not in legacy: signed private-file link
         subject: a.subjects?.name ?? null,
         class: classLabel(a.classes),
         teacher: a.users?.name ?? null,
@@ -192,7 +193,10 @@ export class StudentAssignmentsController {
     );
     const fileUrl = file
       ? await storeOrReject('file', () =>
-          this.storage.store(file, 'doc', `submissions/${a.id}`),
+          // security: not in legacy: private, served by signed link
+          this.storage.store(file, 'doc', `submissions/${a.id}`, {
+            private: true,
+          }),
         )
       : undefined;
 

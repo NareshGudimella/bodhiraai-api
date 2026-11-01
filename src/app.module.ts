@@ -24,6 +24,7 @@ import { SuperModule } from './super/super.module';
 import { ContentModule } from './content/content.module';
 import { StudentModule } from './student/student.module';
 import { TeacherModule } from './teacher/teacher.module';
+import { VideoModule } from './video/video.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { TeacherModule } from './teacher/teacher.module';
     ContentModule,
     BillingModule,
     CmsModule,
+    VideoModule,
   ],
   controllers: [HealthController],
   providers: [

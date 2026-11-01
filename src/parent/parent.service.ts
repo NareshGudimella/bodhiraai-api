@@ -18,6 +18,7 @@ import {
 } from '../db/schema';
 import type { users } from '../db/types';
 import { classLabel } from '../teacher/teacher.service';
+import { signedFileUrl } from '../storage/file-url';
 
 const MONTHS = [
   'January',
@@ -99,7 +100,7 @@ export class ParentService {
       grade: p.users_parent_student_student_idTousers.grade,
       relation: p.relation,
       // Not in legacy: the avatar, so apps can show the child's photo in lists.
-      avatar: p.users_parent_student_student_idTousers.avatar,
+      avatar: signedFileUrl(p.users_parent_student_student_idTousers.avatar), // security: not in legacy: signed private-file link
     }));
   }
 
@@ -156,7 +157,7 @@ export class ParentService {
         relation: link.relation,
         school: school?.name ?? null,
         // Not in legacy: the avatar, so apps can show the child's photo.
-        avatar: child.avatar,
+        avatar: signedFileUrl(child.avatar), // security: not in legacy: signed private-file link
         stats: s,
       });
     }

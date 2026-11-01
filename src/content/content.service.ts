@@ -163,6 +163,7 @@ export class ContentService {
         type: (data.type as string | undefined) ?? 'video',
         thumbnail: str('thumbnail'),
         content_url: str('content_url'),
+        video_id: str('video_id'), // security: not in legacy (VdoCipher)
         content_body: str('content_body'),
         duration_sec: int(data.duration_sec),
         sort_order: int(data.sort_order ?? (top ?? 0) + 1),
@@ -183,6 +184,7 @@ export class ContentService {
       type: data.type ?? lesson.type,
       thumbnail: keep('thumbnail'),
       content_url: keep('content_url'),
+      video_id: keep('video_id'), // security: not in legacy (VdoCipher)
       content_body: keep('content_body'),
       duration_sec: int(data.duration_sec ?? lesson.duration_sec),
       sort_order: int(data.sort_order ?? lesson.sort_order),

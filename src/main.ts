@@ -9,8 +9,14 @@ import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { configureApp } from './app.setup';
+import { assertFileUrlConfig } from './storage/file-url';
+import { assertVdoCipherConfig } from './video/vdocipher.client';
 
 async function bootstrap() {
+  // security: not in legacy. Fail closed: production refuses to start without
+  // FILE_URL_SECRET/FILES_BASE_URL (signed private-file links).
+  assertFileUrlConfig();
+  assertVdoCipherConfig();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   configureApp(app);
   await app.listen(Number(process.env.PORT ?? 4000));

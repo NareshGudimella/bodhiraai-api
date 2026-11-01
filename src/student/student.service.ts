@@ -49,6 +49,7 @@ import type {
   users,
 } from '../db/types';
 import { getBadge, tierRank, type Badge } from './badge-catalog';
+import { signedFileUrl } from '../storage/file-url';
 
 /** Port of App\Services\StudentService. Keep logic identical; note deviations inline. */
 @Injectable()
@@ -72,7 +73,7 @@ export class StudentService {
         id: student.id,
         name: student.name,
         grade: student.grade,
-        avatar: student.avatar,
+        avatar: signedFileUrl(student.avatar), // security: not in legacy: signed private-file link
         school: school?.name ?? null,
       },
       stats: {

@@ -43,6 +43,13 @@
       "when": 1793505184207,
       "tag": "0005_mail_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793514756352,
+      "tag": "0006_lesson_video_id",
+      "breakpoints": true
     }
   ]
 }

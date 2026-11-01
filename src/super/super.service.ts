@@ -349,6 +349,7 @@ export class SuperService {
       logo,
       'image',
       `schools/${school.id}/logo`,
+      { private: true }, // security: not in legacy: served by signed link
     );
     const theme = await themeFromImage(logo.buffer);
     const settings = jsonCast<Record<string, unknown>>(school.settings) ?? {};

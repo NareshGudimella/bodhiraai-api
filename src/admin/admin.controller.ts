@@ -34,6 +34,7 @@ import {
   eqOrNull,
   guardSameSchool,
 } from './admin.service';
+import { signedFileUrl } from '../storage/file-url';
 
 const ROLES = Object.values(Role).join(',');
 
@@ -139,7 +140,8 @@ export class AdminController {
         role: u.role,
         grade: u.grade,
         status: u.status,
-        avatar: u.avatar, // not in legacy API: the Blade list shows avatars
+        // not in legacy API: the Blade list shows avatars (signed: security: not in legacy)
+        avatar: signedFileUrl(u.avatar),
       })),
       null,
       pageMeta(page, perPage, total),

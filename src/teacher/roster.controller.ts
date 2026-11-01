@@ -34,6 +34,7 @@ import {
 } from '../storage/uploads';
 import { RosterService, type StudentInput } from './roster.service';
 import { classLabel, TeacherService } from './teacher.service';
+import { signedFileUrl } from '../storage/file-url';
 
 const studentRules = (ignoreId?: bigint) => ({
   ...PROFILE_RULES,
@@ -57,7 +58,7 @@ const rosterRow = (s: users, rollNo: string | null) => ({
   phone: s.phone,
   gender: s.gender,
   dob: s.dob ? s.dob.toISOString().slice(0, 10) : null,
-  avatar: s.avatar,
+  avatar: signedFileUrl(s.avatar), // security: not in legacy: signed private-file link
   status: s.status,
   roll_no: rollNo,
 });
@@ -91,7 +92,8 @@ export class RosterController {
       roll_no: s('roll_no'),
       avatarUrl: avatar
         ? await storeOrReject('avatar', () =>
-            this.storage.storeCloud(avatar, 'image'),
+            // security: not in legacy: private, served by signed link
+            this.storage.storeCloud(avatar, 'image', { private: true }),
           )
         : undefined,
     };

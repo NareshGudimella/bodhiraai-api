@@ -26,6 +26,7 @@ import {
   users as usersTable,
 } from '../db/schema';
 import type { conversations, messages, users } from '../db/types';
+import { signedFileUrl } from '../storage/file-url';
 
 const NOT_PARTICIPANT = 'You are not part of this conversation.';
 
@@ -43,7 +44,7 @@ function partner(u: users | null) {
         name: u.name,
         role: u.role,
         role_label: roleLabel(u.role),
-        avatar: u.avatar,
+        avatar: signedFileUrl(u.avatar), // security: not in legacy: signed private-file link
       }
     : null;
 }

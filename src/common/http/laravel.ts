@@ -1,3 +1,4 @@
+import { signedFileUrl } from '../../storage/file-url';
 import { ApiException } from './api.exception';
 
 /**
@@ -182,7 +183,11 @@ export function routeId(raw: string, model: string): bigint {
   return BigInt(raw);
 }
 
-type Cast = 'datetime' | 'date' | 'array' | 'bool' | 'int';
+/**
+ * `file` (security: not in legacy): a private-file column; `/files/<key>`
+ * values come out as short-lived signed links (storage/file-url.ts).
+ */
+type Cast = 'datetime' | 'date' | 'array' | 'bool' | 'int' | 'file';
 
 /**
  * Eloquent Model::toArray() for a database row: hides `$hidden`, applies `$casts`,
@@ -219,6 +224,7 @@ export function eloquentRow(
     else if (cast === 'array') out[key] = jsonCast(value as string | null);
     else if (cast === 'bool') out[key] = Boolean(value);
     else if (cast === 'int') out[key] = value === null ? null : Number(value);
+    else if (cast === 'file') out[key] = signedFileUrl(value);
     else if (value instanceof Date) {
       out[key] = opts.dateOnly?.includes(key)
         ? dateString(value)
