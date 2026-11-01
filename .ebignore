@@ -1,0 +1,15 @@
+# What `eb deploy` uploads: the built dist/, package files, Procfile and the
+# Beanstalk config. Dependencies install on the instance (npm, production only).
+node_modules/
+src/
+test/
+drizzle/
+docs/
+coverage/
+storage/
+.env*
+*.log
+*.tsbuildinfo
+.DS_Store
+scripts/
+.github/
