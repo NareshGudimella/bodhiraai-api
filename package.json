@@ -21,6 +21,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "ts-node --transpile-only src/db/seed.ts",
+    "db:direct-school": "ts-node --transpile-only src/db/direct-school.ts",
     "user:create-super-admin": "ts-node --transpile-only src/db/create-super-admin.ts",
     "files:make-private": "ts-node --transpile-only src/db/make-files-private.ts"
   },

@@ -16,6 +16,7 @@ import { ApiException, ValidationFailed } from '../common/http/api.exception';
 import { iso8601, modelNotFound } from '../common/http/laravel';
 import { Role } from '../common/roles';
 import { DB, type Db } from '../db/db';
+import { schoolOf } from '../common/direct-school';
 import { countOf } from '../db/helpers';
 import {
   class_student,
@@ -129,22 +130,19 @@ export class LiveClassService {
    */
   async listForStudent(student: users) {
     const classIds = await this.enrolledClassIds(student);
+    // not in legacy: Bodhira Direct counts as no school (common/direct-school.ts).
+    const schoolId = await schoolOf(this.db, student);
     const t = liveClassesTable;
     const audience: (SQL | undefined)[] = [];
     if (classIds.length) audience.push(inArray(t.class_id, classIds));
     // security: not in legacy — a syllabus-scoped class only reaches students of
     // the host's own school.
-    if (student.syllabus_id && student.school_id)
+    if (student.syllabus_id && schoolId)
       audience.push(
-        and(
-          eq(t.syllabus_id, student.syllabus_id),
-          eq(t.school_id, student.school_id),
-        ),
+        and(eq(t.syllabus_id, student.syllabus_id), eq(t.school_id, schoolId)),
       );
-    if (student.school_id)
-      audience.push(
-        and(eq(t.school_id, student.school_id), isNull(t.class_id)),
-      );
+    if (schoolId)
+      audience.push(and(eq(t.school_id, schoolId), isNull(t.class_id)));
 
     // security: not in legacy — legacy applied no audience filter at all for a
     // student with no class, syllabus or school (every class of every school).
@@ -163,15 +161,16 @@ export class LiveClassService {
   /** Student LiveClassApiController::canAccess. */
   async canAccess(student: users, lc: live_classes) {
     const classIds = await this.enrolledClassIds(student);
+    const schoolId = await schoolOf(this.db, student); // Bodhira Direct: none
     return (
       (lc.class_id !== null && classIds.includes(lc.class_id)) ||
       // security: not in legacy — syllabus scope is limited to the host's school.
       (lc.syllabus_id !== null &&
         student.syllabus_id === lc.syllabus_id &&
         lc.school_id !== null &&
-        student.school_id === lc.school_id) ||
+        schoolId === lc.school_id) ||
       (lc.school_id !== null &&
-        student.school_id === lc.school_id &&
+        schoolId === lc.school_id &&
         lc.class_id === null)
     );
   }
@@ -383,6 +382,8 @@ export class LiveClassService {
   /** Teacher LiveClassApiController::notifyAudience → LiveClassScheduled (database channel). */
   private async notifyAudience(lc: live_classes, host: users) {
     let students: { id: bigint }[] = [];
+    // not in legacy: Bodhira Direct has no school-wide audience.
+    const schoolId = await schoolOf(this.db, lc);
     if (lc.class_id) {
       students = (
         await this.db.query.class_student.findMany({
@@ -396,16 +397,16 @@ export class LiveClassService {
         // security: not in legacy — students of the host's school only.
         where: and(
           eq(usersTable.syllabus_id, lc.syllabus_id),
-          lc.school_id ? eq(usersTable.school_id, lc.school_id) : sql`false`,
+          schoolId ? eq(usersTable.school_id, schoolId) : sql`false`,
           eq(usersTable.role, Role.Student),
         ),
         columns: { id: true },
         orderBy: [asc(usersTable.id)],
       });
-    } else if (lc.school_id) {
+    } else if (schoolId) {
       students = await this.db.query.users.findMany({
         where: and(
-          eq(usersTable.school_id, lc.school_id),
+          eq(usersTable.school_id, schoolId),
           eq(usersTable.role, Role.Student),
         ),
         columns: { id: true },

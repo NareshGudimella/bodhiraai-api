@@ -4,6 +4,7 @@ import type { users } from '../db/types';
 import { Role } from '../common/roles';
 import { DB, type Db } from '../db/db';
 import { schools, subscriptions } from '../db/schema';
+import { schoolOf } from '../common/direct-school';
 
 const USER_MORPH = 'App\\Models\\User';
 
@@ -12,6 +13,7 @@ const USER_MORPH = 'App\\Models\\User';
  *  - Non-students are never gated.
  *  - B2B students (school_id): the school's status, plan and plan_expires_at.
  *  - B2C students: their latest Subscription row (trialing → trial_ends_at, active → current_period_end).
+ *    Bodhira Direct students count as B2C (not in legacy: common/direct-school.ts).
  */
 @Injectable()
 export class SubscriptionAccessService {
@@ -21,9 +23,10 @@ export class SubscriptionAccessService {
     if (user.role !== (Role.Student as string)) return true;
     const now = Date.now();
 
-    if (user.school_id) {
+    const schoolId = await schoolOf(this.db, user);
+    if (schoolId) {
       const school = await this.db.query.schools.findFirst({
-        where: eq(schools.id, user.school_id),
+        where: eq(schools.id, schoolId),
       });
       if (!school || school.status !== 'active') return false;
       if (school.plan === 'free' || !school.plan_expires_at) return true;

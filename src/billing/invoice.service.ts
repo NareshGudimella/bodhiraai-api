@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { desc, eq } from 'drizzle-orm';
 import { DB, type Db } from '../db/db';
+import { schoolOf } from '../common/direct-school';
 import { startsWithCi } from '../db/helpers';
 import { invoices as invoicesTable, users as usersTable } from '../db/schema';
 import type { invoices, plans, subscriptions, users } from '../db/types';
@@ -51,7 +52,8 @@ export class InvoiceService {
       .values({
         number: await this.nextNumber(),
         user_id: buyer.id,
-        school_id: buyer.school_id,
+        // not in legacy: a Bodhira Direct buyer's invoice has no school, like B2C.
+        school_id: await schoolOf(this.db, buyer),
         subscription_id: subscription.id,
         plan_key: plan.key,
         plan_name: plan.name,

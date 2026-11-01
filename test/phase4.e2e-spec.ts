@@ -103,15 +103,17 @@ describe('School admin and super admin (e2e)', () => {
     ]);
   });
 
-  it('validates a new subject before writing', async () => {
+  // not in legacy (2026-11-01): subjects come from the Super Admin's curricula,
+  // so the write routes answer 403 before validation.
+  it('refuses subject writes before validating', async () => {
     const { body } = await request(app.getHttpServer())
       .post('/api/v1/admin/subjects')
       .set(as('admin'))
       .send({ name: '   ', grade: '12345678901' })
-      .expect(422);
-    expect(body.errors).toEqual({
-      name: ['The name field is required.'],
-      grade: ['The grade field must not be greater than 10 characters.'],
+      .expect(403);
+    expect(body).toEqual({
+      success: false,
+      message: "Subjects come from the Super Admin's curricula.",
     });
   });
 

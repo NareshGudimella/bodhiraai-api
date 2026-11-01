@@ -23,6 +23,7 @@ import { laravelValidate } from '../common/http/laravel-validator';
 import { pageFrom, pageMeta } from '../common/http/paginate';
 import { Role } from '../common/roles';
 import { DB, type Db } from '../db/db';
+import { assertNotDirect } from '../common/direct-school';
 import { myDesc } from '../db/helpers';
 import {
   payments as paymentsTable,
@@ -116,6 +117,7 @@ export class SchoolBillingController {
         'Your account is not linked to a school.',
       );
     }
+    assertNotDirect(school, 'be billed as a school'); // not in legacy
 
     const plan = data.plan as string;
     const amount = this.billing.priceForPlan(plan);
@@ -185,6 +187,7 @@ export class SchoolBillingController {
     const id = routeId(raw, 'School');
     const school = await this.liveSchool(id);
     if (!school) throw modelNotFound('School', id);
+    assertNotDirect(school, 'be billed as a school'); // not in legacy
 
     const data = await laravelValidate(this.db, body, {
       plan: ['required', PLANS],

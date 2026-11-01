@@ -13,6 +13,8 @@ import {
 import { and, eq, notInArray } from 'drizzle-orm';
 import { CurrentUser, Roles } from '../common/decorators/auth.decorators';
 import { ok } from '../common/http/api-response';
+import { ApiException } from '../common/http/api.exception';
+import { AdminContentService } from './admin-content.service';
 import { modelNotFound, routeId } from '../common/http/laravel';
 import { laravelValidate } from '../common/http/laravel-validator';
 import { pageFrom, pageMeta } from '../common/http/paginate';
@@ -31,8 +33,10 @@ import { classLabel } from '../teacher/teacher.service';
 import {
   AdminService,
   EDITABLE_ROLES,
+  adminUsers,
   eqOrNull,
   guardSameSchool,
+  guardSameSchoolUser,
 } from './admin.service';
 import { signedFileUrl } from '../storage/file-url';
 
@@ -61,13 +65,7 @@ const userRules = (ignore?: bigint, lockedRole?: string) => {
   };
 };
 
-const SUBJECT_RULES = {
-  name: ['required', 'string', 'max:120'],
-  grade: ['nullable', 'string', 'max:10'],
-  icon: ['nullable', 'string', 'max:8'],
-  color: ['nullable', 'string', 'max:20'],
-  description: ['nullable', 'string'],
-};
+const SUBJECTS_READ_ONLY = "Subjects come from the Super Admin's curricula.";
 
 /** /api/v1/admin/* — port of Api\V1\Admin\AdminApiController (admins and super admins). */
 @Controller('admin')
@@ -75,6 +73,7 @@ const SUBJECT_RULES = {
 export class AdminController {
   constructor(
     private readonly admin: AdminService,
+    private readonly content_: AdminContentService,
     @Inject(DB) private readonly db: Db,
   ) {}
 
@@ -166,7 +165,7 @@ export class AdminController {
   @Get('users/:user')
   async user(@CurrentUser() user: users, @Param('user') raw: string) {
     const u = await this.findUser(raw);
-    guardSameSchool(user, u);
+    await guardSameSchoolUser(this.db, user, u);
     return ok({
       id: u.id,
       name: u.name,
@@ -272,7 +271,7 @@ export class AdminController {
         .from(usersTable)
         .where(
           and(
-            eqOrNull(usersTable.school_id, user.school_id),
+            adminUsers(user),
             eq(usersTable.role, Role.Student),
             notInArray(
               usersTable.id,
@@ -301,12 +300,7 @@ export class AdminController {
       this.db
         .select({ id: usersTable.id, name: usersTable.name })
         .from(usersTable)
-        .where(
-          and(
-            eqOrNull(usersTable.school_id, user.school_id),
-            eq(usersTable.role, Role.Teacher),
-          ),
-        )
+        .where(and(adminUsers(user), eq(usersTable.role, Role.Teacher)))
         .orderBy(asc(usersTable.name), asc(usersTable.id)),
     ]);
     return ok({
@@ -402,37 +396,31 @@ export class AdminController {
     );
   }
 
+  /**
+   * not in legacy (2026-11-01): subjects come from the Super Admin's curricula,
+   * so school admins can no longer create, edit or delete them (403 before any
+   * lookup or validation). Existing school subjects stay; the Super Admin
+   * manages them in /content.
+   */
   @Post('subjects')
-  async createSubject(@CurrentUser() user: users, @Body() body: unknown) {
-    const data = await laravelValidate(this.db, body, SUBJECT_RULES);
-    const s = await this.admin.createSubject(user, data);
-    return ok({ id: s.id }, 'Subject created.');
+  createSubject() {
+    throw new ApiException(SUBJECTS_READ_ONLY, 403);
   }
 
   @Patch('subjects/:subject')
-  async updateSubject(
-    @CurrentUser() user: users,
-    @Param('subject') raw: string,
-    @Body() body: unknown,
-  ) {
-    const subject = await this.findSubject(raw);
-    const data = await laravelValidate(this.db, body, {
-      ...SUBJECT_RULES,
-      is_active: ['nullable', 'boolean'],
-    });
-    const s = await this.admin.updateSubject(user, subject, data);
-    return ok({ id: s.id }, 'Subject updated.');
+  updateSubject() {
+    throw new ApiException(SUBJECTS_READ_ONLY, 403);
   }
 
   @Delete('subjects/:subject')
-  async deleteSubject(
-    @CurrentUser() user: users,
-    @Param('subject') raw: string,
-  ) {
-    const subject = await this.findSubject(raw);
-    guardSameSchool(user, subject);
-    await this.admin.deleteSubject(user, subject);
-    return ok(null, 'Subject deleted.');
+  deleteSubject() {
+    throw new ApiException(SUBJECTS_READ_ONLY, 403);
+  }
+
+  /** not in legacy (2026-11-01): the curricula the school uses, to watch (AdminContentService). */
+  @Get('content')
+  async content(@CurrentUser() user: users) {
+    return ok(await this.content_.content(user));
   }
 
   @Get('analytics')

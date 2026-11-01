@@ -31,6 +31,7 @@ import { StudentReportService } from './student-report.service';
 import { StudentService } from './student.service';
 import { SubscribedGuard } from './subscribed.guard';
 import { SubscriptionAccessService } from './subscription-access.service';
+import { schoolOf } from '../common/direct-school';
 
 const USER_JSON = {
   hidden: ['password', 'remember_token', 'otp', 'otp_expires_at'],
@@ -84,9 +85,11 @@ export class StudentController {
   @UseGuards(SubscribedGuard) // security: not in legacy API (legacy web gated it)
   async profile(@CurrentUser() user: users) {
     const summary = await this.service.profileSummary(user);
-    const school = user.school_id
+    // not in legacy: Bodhira Direct shows as no school (common/direct-school.ts).
+    const schoolId = await schoolOf(this.db, user);
+    const school = schoolId
       ? await this.db.query.schools.findFirst({
-          where: eq(schools.id, user.school_id),
+          where: eq(schools.id, schoolId),
         })
       : null;
     return ok({

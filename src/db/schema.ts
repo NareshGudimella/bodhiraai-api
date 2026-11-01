@@ -1526,6 +1526,9 @@ export const schools = pgTable(
     plan_expires_at: date('plan_expires_at', { mode: 'date' }),
     status: citext('status').notNull().default('active'),
     settings: text('settings'),
+    // not in legacy: the default organization of self sign-up students
+    // ("Bodhira Direct", run by the Super Admin). See common/organization.ts.
+    is_direct: boolean('is_direct').notNull().default(false),
     created_at: timestamp('created_at', { mode: 'date', precision: 0 }),
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
     deleted_at: timestamp('deleted_at', { mode: 'date', precision: 0 }),
@@ -1534,6 +1537,10 @@ export const schools = pgTable(
     uniqueIndex('schools_slug_unique').on(t.slug),
     uniqueIndex('schools_code_unique').on(t.code),
     index('schools_status_index').on(t.status),
+    // At most one direct organization.
+    uniqueIndex('schools_is_direct_unique')
+      .on(t.is_direct)
+      .where(sql`${t.is_direct}`),
   ],
 );
 

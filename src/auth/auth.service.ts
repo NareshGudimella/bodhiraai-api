@@ -9,6 +9,7 @@ import { laravelValidate } from '../common/http/laravel-validator';
 import { toModel } from '../common/http/eloquent';
 import { abilitiesFor, Role } from '../common/roles';
 import { DB, type Db } from '../db/db';
+import { directSchoolId } from '../common/direct-school';
 import {
   otp_attempts,
   plans,
@@ -125,13 +126,20 @@ export class AuthService {
       });
       if (!school)
         errors.school_code = ['The selected school code is invalid.'];
-      else schoolId = school.id;
+      // not in legacy: Bodhira Direct's code works like no code (below).
+      else if (!school.is_direct) schoolId = school.id;
     }
     if (Object.keys(errors).length) throw new ValidationFailed(errors);
 
     // security: not in legacy: teacher and parent accounts wait for the school
     // to approve them (an admin sets the status to active); students are active.
     const pending = NEEDS_APPROVAL.includes(dto.role);
+    // not in legacy: a student without a school code joins Bodhira Direct, the
+    // default school (no seat cap; individual rules, common/direct-school.ts).
+    // Teachers and parents without a code keep no school.
+    if (!schoolId && dto.role === Role.Student)
+      schoolId = await directSchoolId(this.db);
+    const direct = !!schoolId && schoolId === (await directSchoolId(this.db));
     const now = new Date();
     const password = await hashPassword(dto.password);
     const user = await this.db.transaction(async (tx) => {
@@ -139,7 +147,7 @@ export class AuthService {
       // apply to self-registration too. The school row is locked so two sign-ups
       // can't both take the last seat. A sign-up awaiting approval holds no seat
       // (see common/seats.ts); approving it is checked instead.
-      if (schoolId && !pending && dto.role === Role.Student) {
+      if (schoolId && !direct && !pending && dto.role === Role.Student) {
         const [school] = await tx
           .select()
           .from(schools)
@@ -228,8 +236,8 @@ export class AuthService {
   }
 
   /**
-   * RegisterController::store (B2C sign-up): a student with no school, a
-   * trial subscription (the plan's trial_days, else 7), and a session. A
+   * RegisterController::store (B2C sign-up): a student in Bodhira Direct (not
+   * in legacy: legacy had no school; same individual rules), a trial subscription (the plan's trial_days, else 7), and a session. A
    * paid plan goes on to checkout.
    */
   async registerStudent(body: unknown) {
@@ -260,7 +268,7 @@ export class AuthService {
         phone: (data.phone as string | null | undefined) ?? null,
         password: await hashPassword(data.password as string),
         role: Role.Student,
-        school_id: null,
+        school_id: await directSchoolId(this.db),
         syllabus_id: syllabus.id,
         grade: syllabus.grade,
         status: 'active',

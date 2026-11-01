@@ -10,7 +10,8 @@
  * names and phone numbers. Differences from the legacy seeders: the B2C
  * student has a made-up name and address (legacy used a real-looking one), the
  * extra schools get fixed phone numbers instead of random ones, and a content
- * manager and a web admin are added for the Web Studio.
+ * manager and a web admin are added for the Web Studio. The B2C student ends up in
+ * Bodhira Direct, the default school (migration 0007's data step).
  *
  * All demo accounts use the password `password` (legacy's), so this refuses to
  * run when NODE_ENV=production or when the users table has any row. Use
@@ -26,6 +27,7 @@ import { hashPassword } from '../auth/password';
 import { phpJsonEncode } from '../common/http/laravel';
 import { Role } from '../common/roles';
 import { createDb, type Db } from './db';
+import { applyDirectSchool } from './direct-school';
 import * as s from './schema';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -1496,6 +1498,9 @@ export async function seed(db: Db, env = process.env) {
     );
     await seedCms(tx, users.super);
     await seedPlansAndIndividual(tx, password, syllabi['CBSE-10']);
+    // not in legacy: Bodhira Direct, the default school, after the other
+    // schools (no id clash); the B2C student moves into it.
+    await applyDirectSchool(tx);
   });
 }
 

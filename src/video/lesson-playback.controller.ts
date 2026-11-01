@@ -14,6 +14,7 @@ import { StudentService } from '../student/student.service';
 import { SUBSCRIPTION_INACTIVE_MESSAGE } from '../student/subscribed.guard';
 import { SubscriptionAccessService } from '../student/subscription-access.service';
 import { VdoCipherClient } from './vdocipher.client';
+import { AdminContentService } from '../admin/admin-content.service';
 
 const CANT_PLAY = "You can't play this lesson.";
 
@@ -28,7 +29,10 @@ const CANT_PLAY = "You can't play this lesson.";
  *  - Teachers who teach the lesson's subject to a class in their school (class
  *    teacher of a class with the subject, or the class_subject teacher); a
  *    subject owned by another school never qualifies.
- *  - Everyone else (admins, super admins, parents, …): 403.
+ *  - not in legacy (2026-11-01): school admins, for published lessons of a
+ *    subject in a curriculum their school uses or of their school's own
+ *    (AdminContentService.mayWatch); watermarked with their name and email.
+ *  - Everyone else (super admins, parents, …): 403.
  *
  * 404 when the lesson doesn't exist or has no video. VdoCipher videos get an
  * OTP watermarked with the viewer's name and phone/email; other videos a
@@ -43,6 +47,7 @@ export class LessonPlaybackController {
     private readonly students: StudentService,
     private readonly access: SubscriptionAccessService,
     private readonly vdo: VdoCipherClient,
+    private readonly adminContent: AdminContentService,
   ) {}
 
   @Get(':lesson/playback')
@@ -69,13 +74,19 @@ export class LessonPlaybackController {
       ? await this.studentMayOpen(user, lesson, subject)
       : user.role === (Role.Teacher as string)
         ? await this.teacherTeaches(user, subject)
-        : false;
+        : user.role === (Role.Admin as string)
+          ? await this.adminMayWatch(user, lesson, subject)
+          : false;
     if (!allowed) throw new ApiException(CANT_PLAY, 403);
 
     if (lesson.video_id) {
       if (!this.vdo.configured())
         throw new ApiException('Video playback is not available.', 503);
-      const contact = user.phone || user.email || '';
+      // An admin's watermark is their name and email (not in legacy, 2026-11-01).
+      const contact =
+        user.role === (Role.Admin as string)
+          ? user.email || user.phone || ''
+          : user.phone || user.email || '';
       const watermark = contact ? `${user.name} · ${contact}` : user.name;
       try {
         const { otp, playbackInfo, ttl } = await this.vdo.otp(
@@ -119,6 +130,16 @@ export class LessonPlaybackController {
       if (e instanceof ApiException) return false;
       throw e;
     }
+  }
+
+  private async adminMayWatch(
+    admin: users,
+    lesson: Lesson & { chapters: { is_published: boolean } },
+    subject: subjects | null,
+  ) {
+    if (!lesson.is_published || !lesson.chapters.is_published || !subject)
+      return false;
+    return this.adminContent.mayWatch(admin, subject);
   }
 
   private async teacherTeaches(teacher: users, subject: subjects | null) {

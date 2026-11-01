@@ -708,8 +708,20 @@ describe('Protected media (e2e)', () => {
       expect(res.body.code).toBe('subscription_inactive');
     });
 
-    it('refuses admins, super admins and parents', async () => {
-      for (const who of ['admin', 'super', 'parent'])
+    // not in legacy (2026-11-01): a school admin may watch its own school's
+    // subjects (and used curricula; test/organizations.e2e-spec.ts).
+    it('lets the school admin play its own subject, watermarked with name and email', async () => {
+      calls.length = 0;
+      await play('admin', videoLesson).expect(200);
+      const call = calls.find((c) => c.url === `/videos/${videoId}/otp`);
+      const body = JSON.parse(call!.body) as { annotate: string };
+      expect((JSON.parse(body.annotate) as { text: string }[])[0].text).toBe(
+        `${u.admin.name} · ${u.admin.email}`,
+      );
+    });
+
+    it('refuses super admins and parents', async () => {
+      for (const who of ['super', 'parent'])
         expect((await play(who, videoLesson).expect(403)).body).toEqual(cant);
     });
 

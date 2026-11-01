@@ -49,6 +49,7 @@ import type {
   users,
 } from '../db/types';
 import { getBadge, tierRank, type Badge } from './badge-catalog';
+import { schoolOf } from '../common/direct-school';
 import { signedFileUrl } from '../storage/file-url';
 
 /** Port of App\Services\StudentService. Keep logic identical; note deviations inline. */
@@ -57,9 +58,11 @@ export class StudentService {
   constructor(@Inject(DB) private readonly db: Db) {}
 
   async dashboard(student: users) {
-    const school = student.school_id
+    // Bodhira Direct shows as no school, like a legacy B2C student.
+    const schoolId = await schoolOf(this.db, student);
+    const school = schoolId
       ? await this.db.query.schools.findFirst({
-          where: eq(schools.id, student.school_id),
+          where: eq(schools.id, schoolId),
         })
       : null;
     const withCounts = await this.subjectsWithChapterCounts(student);
@@ -206,12 +209,14 @@ export class StudentService {
   /**
    * Visibility rules: the student's school's subjects, OR subjects of the student's
    * syllabus, OR subjects of syllabi the school opted into; filtered by grade.
+   * A Bodhira Direct student is treated as having no school (common/direct-school.ts).
    */
   private async syllabusIdsFor(student: users) {
     const syllabusIds = new Set<bigint>();
-    if (student.school_id) {
+    const schoolId = await schoolOf(this.db, student);
+    if (schoolId) {
       const opted = await this.db.query.school_syllabus.findMany({
-        where: eq(school_syllabus.school_id, student.school_id),
+        where: eq(school_syllabus.school_id, schoolId),
         columns: { syllabus_id: true },
         orderBy: [asc(school_syllabus.id)],
       });
@@ -223,10 +228,10 @@ export class StudentService {
 
   async subjectsForStudent(student: users): Promise<subjects[]> {
     const syllabusIds = await this.syllabusIdsFor(student);
+    const schoolId = await schoolOf(this.db, student);
 
     const visible: SQL[] = [];
-    if (student.school_id)
-      visible.push(eq(subjectsTable.school_id, student.school_id));
+    if (schoolId) visible.push(eq(subjectsTable.school_id, schoolId));
     if (syllabusIds.size)
       visible.push(inArray(subjectsTable.syllabus_id, [...syllabusIds]));
     // No school AND no syllabus: show nothing rather than the whole table.
@@ -266,11 +271,8 @@ export class StudentService {
    * subject of a syllabus needs the student's own or an opted-in syllabus.
    */
   async authorizeSubject(student: users, subject: subjects) {
-    if (
-      subject.school_id &&
-      student.school_id &&
-      subject.school_id !== student.school_id
-    ) {
+    const schoolId = await schoolOf(this.db, student);
+    if (subject.school_id && schoolId && subject.school_id !== schoolId) {
       throw new ApiException('Subject not available for your school.', 403);
     }
     if (subject.grade && student.grade && subject.grade !== student.grade) {
@@ -279,8 +281,7 @@ export class StudentService {
     // security: not in legacy — the subject must be one the student's subject list
     // shows (subjectsForStudent): their school's own, or on a syllabus they follow.
     // Legacy let a student without a school open any school's subject by id.
-    const ownSchool =
-      !!student.school_id && subject.school_id === student.school_id;
+    const ownSchool = !!schoolId && subject.school_id === schoolId;
     const onSyllabus =
       !!subject.syllabus_id &&
       (await this.syllabusIdsFor(student)).has(subject.syllabus_id);

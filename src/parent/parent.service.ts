@@ -4,6 +4,7 @@ import { toModel } from '../common/http/eloquent';
 import { diffForHumans, modelNotFound } from '../common/http/laravel';
 import { ApiException } from '../common/http/api.exception';
 import { DB, type Db } from '../db/db';
+import { schoolOf } from '../common/direct-school';
 import { asc, myDesc } from '../db/helpers';
 import {
   assignment_submissions,
@@ -143,9 +144,11 @@ export class ParentService {
           message: `${s.pending_assignments} assignment(s) pending`,
         });
       }
-      const school = child.school_id
+      // not in legacy: a Bodhira Direct child shows no school, like legacy B2C.
+      const childSchool = await schoolOf(this.db, child);
+      const school = childSchool
         ? await this.db.query.schools.findFirst({
-            where: eq(schools.id, child.school_id),
+            where: eq(schools.id, childSchool),
             columns: { name: true },
           })
         : null;
@@ -262,9 +265,11 @@ export class ParentService {
       limit: 5,
       with: { quizzes: { with: { subjects: true } } },
     });
-    const school = student.school_id
+    // not in legacy: Bodhira Direct shows as no school (common/direct-school.ts).
+    const studentSchool = await schoolOf(this.db, student);
+    const school = studentSchool
       ? await this.db.query.schools.findFirst({
-          where: eq(schools.id, student.school_id),
+          where: eq(schools.id, studentSchool),
         })
       : null;
 

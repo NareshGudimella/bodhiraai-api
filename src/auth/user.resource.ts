@@ -19,14 +19,17 @@ export function userResource(user: users & { schools?: schools | null }) {
     // Additive (not in legacy's UserResource): the web app's language.
     locale: user.locale,
     ...(user.schools !== undefined && {
-      school: user.schools
-        ? {
-            id: Number(user.schools.id),
-            name: user.schools.name,
-            code: user.schools.code,
-            logo: signedFileUrl(user.schools.logo), // security: not in legacy: signed private-file link
-          }
-        : null,
+      // not in legacy: Bodhira Direct members show no school, so released apps
+      // keep treating them as individual students (common/direct-school.ts).
+      school:
+        user.schools && !user.schools.is_direct
+          ? {
+              id: Number(user.schools.id),
+              name: user.schools.name,
+              code: user.schools.code,
+              logo: signedFileUrl(user.schools.logo), // security: not in legacy: signed private-file link
+            }
+          : null,
     }),
     email_verified: Boolean(user.email_verified_at),
     phone_verified: Boolean(user.phone_verified_at),

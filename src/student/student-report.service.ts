@@ -16,6 +16,7 @@ import {
 import type { users } from '../db/types';
 import { AiService } from '../ai/ai.service';
 import { iso8601 } from '../common/http/laravel';
+import { schoolOf } from '../common/direct-school';
 import { StudentService, levelInfo } from './student.service';
 import {
   attendanceSummary,
@@ -98,11 +99,10 @@ export class StudentReportService {
       tokens = m.t;
     }
 
-    const [school] = user.school_id
-      ? await this.db
-          .select()
-          .from(schools)
-          .where(eq(schools.id, user.school_id))
+    // Bodhira Direct reads as no school (individual learner), like legacy B2C.
+    const schoolId = await schoolOf(this.db, user);
+    const [school] = schoolId
+      ? await this.db.select().from(schools).where(eq(schools.id, schoolId))
       : [];
     const [syllabus] = user.syllabus_id
       ? await this.db
@@ -197,11 +197,10 @@ export class StudentReportService {
     );
     const tok = await this.ai.tokenStatus(user);
 
-    const [school] = user.school_id
-      ? await this.db
-          .select()
-          .from(schools)
-          .where(eq(schools.id, user.school_id))
+    // Bodhira Direct reads as no school (individual learner), like legacy B2C.
+    const schoolId = await schoolOf(this.db, user);
+    const [school] = schoolId
+      ? await this.db.select().from(schools).where(eq(schools.id, schoolId))
       : [];
     const [syllabus] = user.syllabus_id
       ? await this.db
@@ -255,7 +254,7 @@ export class StudentReportService {
       ),
       board: syllabus ? syllabus.board : null,
       syllabus: syllabus ? syllabus.name : null,
-      is_individual: !user.school_id,
+      is_individual: !schoolId,
       school_name: school?.name ?? null,
       ...levelInfo(xp),
     };

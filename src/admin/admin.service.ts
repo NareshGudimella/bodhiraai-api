@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { assertSeatFree, seatsUsed } from '../common/seats';
+import { directSchoolId, individualSchool } from '../common/direct-school';
 import {
   and,
   eq,
@@ -37,7 +38,6 @@ import {
   users as usersTable,
 } from '../db/schema';
 import type { users } from '../db/types';
-import { strRandom, strSlug } from '../storage/laravel-str';
 import { classLabel } from '../teacher/teacher.service';
 import { TokenService } from '../auth/token.service';
 import { RosterService } from '../teacher/roster.service';
@@ -76,6 +76,34 @@ export const eqOrNull = (col: AnyColumn, v: unknown): SQL =>
 /** One UTC day as a [start, end) range (whereDate). */
 export const onDay = (col: AnyColumn, d: Date) =>
   and(gte(col, d), lt(col, new Date(d.getTime() + 86_400_000)))!;
+
+/**
+ * The users an admin manages: their school's. A super admin (no school) acts on
+ * the users with no school, like legacy, plus (not in legacy) the members of
+ * Bodhira Direct, the default school, which the Super Admin runs.
+ */
+export const adminUsers = (admin: users): SQL =>
+  admin.school_id !== null
+    ? eq(usersTable.school_id, admin.school_id)
+    : admin.role === (Role.SuperAdmin as string)
+      ? individualSchool(usersTable.school_id)
+      : isNull(usersTable.school_id);
+
+/** guardSameSchool for a user, letting a super admin manage Bodhira Direct members too (adminUsers). */
+export async function guardSameSchoolUser(
+  db: Db,
+  admin: users,
+  user: { school_id: bigint | null },
+) {
+  if (
+    admin.school_id === null &&
+    admin.role === (Role.SuperAdmin as string) &&
+    user.school_id !== null &&
+    user.school_id === (await directSchoolId(db))
+  )
+    return;
+  guardSameSchool(admin, user);
+}
 
 /** `$model->school_id !== $admin->school_id` → 403 (null matches null, like PHP). */
 export function guardSameSchool(
@@ -117,12 +145,7 @@ export class AdminService {
     return this.db
       .select({ id: usersTable.id })
       .from(usersTable)
-      .where(
-        and(
-          eqOrNull(usersTable.school_id, admin.school_id),
-          eq(usersTable.role, Role.Student),
-        ),
-      )
+      .where(and(adminUsers(admin), eq(usersTable.role, Role.Student)))
       .orderBy(asc(usersTable.id));
   }
 
@@ -134,7 +157,7 @@ export class AdminService {
     const count = (role: Role) =>
       this.db.$count(
         usersTable,
-        and(eqOrNull(usersTable.school_id, sid), eq(usersTable.role, role)),
+        and(adminUsers(admin), eq(usersTable.role, role)),
       );
     const students = await count(Role.Student);
     const studentIds = (await this.schoolStudents(admin)).map((s) => s.id);
@@ -155,7 +178,7 @@ export class AdminService {
         .orderBy(asc(classesTable.id))
     ).map((c) => c.id);
     const signups = await this.db.query.users.findMany({
-      where: eqOrNull(usersTable.school_id, sid),
+      where: adminUsers(admin),
       orderBy: [myDesc(usersTable.created_at), asc(usersTable.id)],
       limit: 6,
     });
@@ -223,7 +246,7 @@ export class AdminService {
     page: number,
   ) {
     const where = and(
-      eqOrNull(usersTable.school_id, admin.school_id),
+      adminUsers(admin),
       role ? eq(usersTable.role, role) : undefined,
       q
         ? or(
@@ -304,7 +327,13 @@ export class AdminService {
     const [row] = await this.db
       .insert(usersTable)
       .values({
-        school_id: admin.school_id,
+        // not in legacy: a student a super admin adds joins Bodhira Direct.
+        school_id:
+          admin.school_id ??
+          (admin.role === (Role.SuperAdmin as string) &&
+          role === (Role.Student as string)
+            ? await directSchoolId(this.db)
+            : null),
         name: s('name')!,
         email: s('email'),
         phone: s('phone'),
@@ -324,7 +353,7 @@ export class AdminService {
 
   /** Only the validated keys among name/email/phone/role/gender/grade/dob, plus a new password. */
   async updateUser(admin: users, user: users, data: Record<string, unknown>) {
-    guardSameSchool(admin, user);
+    await guardSameSchoolUser(this.db, admin, user);
     const fields: Record<string, unknown> = {};
     // Not in legacy: an admin / super admin account keeps its role (the edit
     // form locks the role select; legacy's `in:` rule also refused 'admin').
@@ -352,7 +381,7 @@ export class AdminService {
   }
 
   async toggleUser(admin: users, user: users) {
-    guardSameSchool(admin, user);
+    await guardSameSchoolUser(this.db, admin, user);
     // security: not in legacy — approving an on-hold account takes a seat.
     if (user.status === 'on_hold') {
       await assertSeatFree(this.db, user.school_id, user.role, 'status');
@@ -634,55 +663,6 @@ export class AdminService {
         ),
       }),
     });
-  }
-
-  async createSubject(admin: users, data: Record<string, unknown>) {
-    const now = new Date();
-    const name = data.name as string;
-    const [row] = await this.db
-      .insert(subjectsTable)
-      .values({
-        school_id: admin.school_id,
-        name,
-        slug: `${strSlug(name)}-${strRandom(4)}`,
-        grade: (data.grade as string | null | undefined) ?? null,
-        icon: (data.icon as string | null | undefined) ?? '📘',
-        color: (data.color as string | null | undefined) ?? '#C49560',
-        description: (data.description as string | null | undefined) ?? null,
-        is_active: true,
-        created_at: now,
-        updated_at: now,
-      })
-      .returning();
-    return row;
-  }
-
-  async updateSubject(
-    admin: users,
-    subject: { id: bigint; school_id: bigint | null },
-    data: Record<string, unknown>,
-  ) {
-    guardSameSchool(admin, subject);
-    const fields: Record<string, unknown> = {};
-    for (const k of ['name', 'grade', 'icon', 'color', 'description'] as const)
-      if (k in data) fields[k] = data[k];
-    if ('is_active' in data && data.is_active !== null) {
-      fields.is_active = [true, 1, '1'].includes(data.is_active as never);
-    }
-    const [row] = await this.db
-      .update(subjectsTable)
-      .set({ ...fields, updated_at: new Date() })
-      .where(eq(subjectsTable.id, subject.id))
-      .returning();
-    return row;
-  }
-
-  async deleteSubject(
-    admin: users,
-    subject: { id: bigint; school_id: bigint | null },
-  ) {
-    guardSameSchool(admin, subject);
-    await this.db.delete(subjectsTable).where(eq(subjectsTable.id, subject.id));
   }
 
   async analytics(admin: users) {

@@ -12,24 +12,25 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { Roles } from '../common/decorators/auth.decorators';
 import { ok } from '../common/http/api-response';
 import { toModel } from '../common/http/eloquent';
-import { iso8601, modelNotFound, routeId } from '../common/http/laravel';
+import { iso8601 } from '../common/http/laravel';
 import { laravelValidate } from '../common/http/laravel-validator';
 import { pageFrom, pageMeta } from '../common/http/paginate';
 import { Role } from '../common/roles';
 import { DB, type Db } from '../db/db';
+import { assertNotDirect } from '../common/direct-school';
 import { asc } from '../db/helpers';
-import { school_syllabus, schools, syllabi } from '../db/schema';
+import { school_syllabus, syllabi } from '../db/schema';
 import type { IncomingFile } from '../storage/upload-rules';
 import {
   storeOrReject,
   uploadOptions,
   validateWithFiles,
 } from '../storage/uploads';
-import { LIVE_SCHOOL, PLAN_PRICING, SuperService } from './super.service';
+import { PLAN_PRICING, SuperService } from './super.service';
 
 const PLANS = `in:${Object.keys(PLAN_PRICING).join(',')}`;
 
@@ -80,14 +81,8 @@ export class SuperController {
   ) {}
 
   /** Route-model binding for School (soft-deleted schools 404). */
-  private async findSchool(raw: string) {
-    const id = routeId(raw, 'School');
-    const s = await this.db.query.schools.findFirst({
-      where: and(eq(schools.id, id), LIVE_SCHOOL),
-      orderBy: [asc(schools.id)],
-    });
-    if (!s) throw modelNotFound('School', id);
-    return s;
+  private findSchool(raw: string) {
+    return this.sup.findSchool(raw);
   }
 
   @Get('home')
@@ -122,6 +117,8 @@ export class SuperController {
         status: s.status,
         users_count: s.users_count,
         classes_count: s.classes_count,
+        // not in legacy: Bodhira Direct, the default school (2026-11-01)
+        is_direct: s.is_direct,
         // not in legacy API: the Blade list shows the location
         city: s.city,
         state: s.state,
@@ -240,7 +237,9 @@ export class SuperController {
   @Post('schools/:school/toggle')
   @HttpCode(200)
   async toggleSchool(@Param('school') raw: string) {
-    const s = await this.sup.toggleSchool(await this.findSchool(raw));
+    const school = await this.findSchool(raw);
+    assertNotDirect(school, 'be deactivated'); // not in legacy
+    const s = await this.sup.toggleSchool(school);
     return ok({ status: s.status }, 'Status toggled.');
   }
 

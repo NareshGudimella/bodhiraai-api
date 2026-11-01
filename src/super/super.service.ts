@@ -16,11 +16,14 @@ import { dirtyFields, toModel } from '../common/http/eloquent';
 import {
   iso8601,
   jsonCast,
+  modelNotFound,
   parseLaravelDate,
   phpJsonEncode,
+  routeId,
 } from '../common/http/laravel';
 import { Role } from '../common/roles';
 import { DB, type Db } from '../db/db';
+import { assertNotDirect } from '../common/direct-school';
 import { asc, containsCi, countOf, myDesc, mySum } from '../db/helpers';
 import {
   ai_chat_messages,
@@ -53,6 +56,12 @@ const int = (v: unknown) => Math.trunc(Number(v ?? 0)) || 0;
 
 /** Soft-deleted schools are invisible to Eloquent queries. */
 export const LIVE_SCHOOL = isNull(schoolsTable.deleted_at);
+
+/**
+ * not in legacy: schools that count in platform figures (dashboard, revenue).
+ * Bodhira Direct is left out: its students were "no school" in these figures.
+ */
+const BILLED_SCHOOL = and(LIVE_SCHOOL, eq(schoolsTable.is_direct, false))!;
 
 const pct = (n: number, total: number) =>
   total > 0 ? Math.round((n / total) * 100) : 0;
@@ -87,7 +96,7 @@ export class SuperService {
     const users = (role: Role) =>
       this.db.$count(usersTable, eq(usersTable.role, role));
     const active = await this.db.query.schools.findMany({
-      where: and(LIVE_SCHOOL, eq(schoolsTable.status, 'active')),
+      where: and(BILLED_SCHOOL, eq(schoolsTable.status, 'active')),
       orderBy: [asc(schoolsTable.id)],
     });
     const mrr = active.reduce((n, s) => n + (PLAN_PRICING[s.plan] ?? 0), 0);
@@ -110,7 +119,7 @@ export class SuperService {
     }
 
     const top = await this.db.query.schools.findMany({
-      where: LIVE_SCHOOL,
+      where: BILLED_SCHOOL,
       orderBy: (t) => [desc(countOf(usersTable, 'school_id', t.id)), asc(t.id)],
       limit: 5,
       extras: (t) => ({
@@ -121,7 +130,7 @@ export class SuperService {
 
     return {
       platform: {
-        schools_total: await this.db.$count(schoolsTable, LIVE_SCHOOL),
+        schools_total: await this.db.$count(schoolsTable, BILLED_SCHOOL),
         schools_active: active.length,
         users_total: await this.db.$count(usersTable),
         students: await users(Role.Student),
@@ -190,6 +199,17 @@ export class SuperService {
       this.db.$count(schoolsTable, where),
     ]);
     return { items, total };
+  }
+
+  /** Route-model binding for School (soft-deleted schools 404). */
+  async findSchool(raw: string) {
+    const id = routeId(raw, 'School');
+    const s = await this.db.query.schools.findFirst({
+      where: and(eq(schoolsTable.id, id), LIVE_SCHOOL),
+      orderBy: [asc(schoolsTable.id)],
+    });
+    if (!s) throw modelNotFound('School', id);
+    return s;
   }
 
   async schoolDetail(school: schools) {
@@ -368,6 +388,19 @@ export class SuperService {
 
   /** `$school->fill(only([...]))->save()`: writes only what changed. */
   async updateSchool(school: schools, data: Record<string, unknown>) {
+    // not in legacy: Bodhira Direct gets no school plan and no seat caps (sending
+    // its current values, as the edit form does, is fine).
+    if (school.is_direct) {
+      if (
+        (data.plan && data.plan !== school.plan) ||
+        ('plan_expires_at' in data && data.plan_expires_at)
+      )
+        assertNotDirect(school, 'be billed as a school');
+      for (const k of ['max_teachers', 'max_students'] as const) {
+        if (k in data && data[k] !== null && int(data[k]) !== school[k])
+          assertNotDirect(school, 'have seat caps');
+      }
+    }
     const fields: Record<string, unknown> = {};
     for (const k of [
       'name',
@@ -448,7 +481,7 @@ export class SuperService {
 
   async revenue() {
     const all = await this.db.query.schools.findMany({
-      where: LIVE_SCHOOL,
+      where: BILLED_SCHOOL,
       orderBy: [asc(schoolsTable.id)],
     });
     const groups = new Map<string, schools[]>();
@@ -465,7 +498,7 @@ export class SuperService {
     const col = schoolsTable.plan_expires_at;
     const expiring = await this.db.query.schools.findMany({
       where: and(
-        LIVE_SCHOOL,
+        BILLED_SCHOOL,
         isNotNull(col),
         dateCmp(col, '>=', new Date()),
         dateCmp(col, '<=', new Date(Date.now() + 30 * 86_400_000)),

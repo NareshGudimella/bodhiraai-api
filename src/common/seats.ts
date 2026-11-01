@@ -41,9 +41,10 @@ export async function assertSeatFree(
   if (!schoolId || !isSeatRole(role)) return;
   const school = await db.query.schools.findFirst({
     where: eq(schools.id, schoolId),
-    columns: { max_teachers: true, max_students: true },
+    columns: { max_teachers: true, max_students: true, is_direct: true },
   });
-  if (!school) return;
+  // not in legacy: Bodhira Direct (the default school) has no seat caps.
+  if (!school || school.is_direct) return;
   const teacher = role === Role.Teacher;
   const max = Number(teacher ? school.max_teachers : school.max_students);
   if ((await seatsUsed(db, schoolId, role)) >= max) {

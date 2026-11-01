@@ -13,6 +13,7 @@ import {
   sql,
 } from 'drizzle-orm';
 import { ApiException } from '../common/http/api.exception';
+import { schoolOf } from '../common/direct-school';
 import { modelNotFound } from '../common/http/laravel';
 import { strLimit } from '../common/http/php-strings';
 import { DB, type Db } from '../db/db';
@@ -152,9 +153,11 @@ export class AiService {
 
   /** The school's override, else AI_DAILY_TOKEN_LIMIT (default 5000). A 0 override falls through. */
   async dailyTokenLimit(user: users) {
-    const school = user.school_id
+    // Bodhira Direct members get the platform default, like legacy B2C.
+    const schoolId = await schoolOf(this.db, user);
+    const school = schoolId
       ? await this.db.query.schools.findFirst({
-          where: eq(schools.id, user.school_id),
+          where: eq(schools.id, schoolId),
           columns: { ai_daily_token_limit: true },
         })
       : null;
@@ -336,6 +339,7 @@ export class AiService {
       }
     }
 
+    const schoolId = await schoolOf(this.db, student); // Bodhira Direct: none
     const started = await this.db.query.lesson_progress.findMany({
       where: eq(lesson_progress.student_id, student.id),
       columns: { lesson_id: true },
@@ -356,9 +360,7 @@ export class AiService {
               .where(
                 and(
                   eq(chapters.id, t.chapter_id),
-                  student.school_id
-                    ? eq(subjects.school_id, student.school_id)
-                    : undefined,
+                  schoolId ? eq(subjects.school_id, schoolId) : undefined,
                   student.grade ? eq(subjects.grade, student.grade) : undefined,
                 ),
               ),

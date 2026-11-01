@@ -24,6 +24,7 @@ const MODELS = {
       max_teachers: 'int',
       max_students: 'int',
       ai_daily_token_limit: 'int',
+      is_direct: 'bool', // not in legacy: Bodhira Direct (2026-11-01)
     },
   },
   classes: {},
