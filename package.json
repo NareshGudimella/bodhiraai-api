@@ -20,6 +20,8 @@
     "test:e2e": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:seed": "ts-node --transpile-only src/db/seed.ts",
+    "user:create-super-admin": "ts-node --transpile-only src/db/create-super-admin.ts",
     "files:make-private": "ts-node --transpile-only src/db/make-files-private.ts"
   },
   "dependencies": {

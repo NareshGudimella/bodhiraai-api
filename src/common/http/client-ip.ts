@@ -13,8 +13,22 @@ const OPEN_PATHS = new Set(['/api/v1/ping', '/health']);
  * - any other request is refused with 403, except the probes in OPEN_PATHS,
  *   so the origin can't be used around the Worker.
  * Without PROXY_SECRET (local development) nothing changes: `req.ip` comes
- * from X-Forwarded-For and TRUST_PROXY.
+ * from X-Forwarded-For and TRUST_PROXY. Production refuses to start without
+ * it (assertProxyConfig in main.ts).
  */
+/**
+ * security: not in legacy. Called at boot: in production, refuse to start
+ * without PROXY_SECRET. Without it the origin answers anyone who goes around
+ * the Worker, and rate limits and audit rows would key on the proxy's address.
+ */
+export function assertProxyConfig(
+  env: Record<string, string | undefined> = process.env,
+) {
+  if (env.NODE_ENV !== 'production') return;
+  if (!env.PROXY_SECRET?.trim())
+    throw new Error('PROXY_SECRET must be set in production');
+}
+
 export function clientIp() {
   const secret = process.env.PROXY_SECRET
     ? Buffer.from(process.env.PROXY_SECRET)

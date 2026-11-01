@@ -499,6 +499,14 @@ describe('Tenant isolation (e2e)', () => {
         '/student/quizzes/2',
         '/student/assignments',
         '/student/live-classes',
+        // Gap fixes 2026-11-01 (legacy web gated these too).
+        '/student/profile',
+        '/student/profile/report',
+        '/student/badges',
+        '/student/ai/sessions',
+        '/student/ai/sessions/1',
+        '/student/ai/recommendations',
+        '/student/ai/tokens',
       ]) {
         const res = await get('expired', path);
         expect([path, res.status]).toEqual([path, 402]);
@@ -514,13 +522,15 @@ describe('Tenant isolation (e2e)', () => {
       await post('expired', '/student/lessons/68/progress', {
         watched_seconds: 1,
       }).expect(402);
+      await post('expired', '/student/ai/sessions', { body: 'hi' }).expect(402);
+      await post('expired', '/student/ai/sessions/1/messages', {
+        body: 'hi',
+      }).expect(402);
     });
 
-    it('keeps access, profile and badges reachable, and gates home like legacy web', async () => {
+    it('keeps access reachable, and gates home like legacy web', async () => {
       const access = await get('expired', '/student/access').expect(200);
       expect(access.body.data).toEqual({ has_access: false });
-      await get('expired', '/student/profile').expect(200);
-      await get('expired', '/student/badges').expect(200);
       const home = await get('expired', '/student/home').expect(402);
       expect(home.body.code).toBe('subscription_inactive');
     });

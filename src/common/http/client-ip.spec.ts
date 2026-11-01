@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { clientIp } from './client-ip';
+import { assertProxyConfig, clientIp } from './client-ip';
 
 function run(
   headers: Record<string, string>,
@@ -59,5 +59,27 @@ describe('clientIp', () => {
       passed: true,
       status: null,
     });
+  });
+});
+
+describe('assertProxyConfig (security: not in legacy)', () => {
+  it('refuses to start in production without PROXY_SECRET', () => {
+    expect(() => assertProxyConfig({ NODE_ENV: 'production' })).toThrow(
+      'PROXY_SECRET must be set in production',
+    );
+    expect(() =>
+      assertProxyConfig({ NODE_ENV: 'production', PROXY_SECRET: '  ' }),
+    ).toThrow();
+  });
+
+  it('starts in production with a secret, and anywhere else without one', () => {
+    expect(() =>
+      assertProxyConfig({
+        NODE_ENV: 'production',
+        PROXY_SECRET: 'x'.repeat(40),
+      }),
+    ).not.toThrow();
+    expect(() => assertProxyConfig({ NODE_ENV: 'development' })).not.toThrow();
+    expect(() => assertProxyConfig({})).not.toThrow();
   });
 });

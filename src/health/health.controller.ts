@@ -97,7 +97,8 @@ export class HealthController {
     }
 
     // Added (not in legacy): the shared rate-limit store, when configured.
-    // Requests still succeed without it, but rate limits are off.
+    // Requests still succeed without it; each instance counts in its own
+    // memory, so limits multiply with the instance count.
     const redis = redisThrottlerStorage();
     if (redis) {
       try {

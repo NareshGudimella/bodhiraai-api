@@ -1,4 +1,12 @@
-import { Body, Controller, Get, HttpCode, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import type { users } from '../db/types';
 import { CurrentUser, Roles } from '../common/decorators/auth.decorators';
@@ -8,6 +16,7 @@ import { ok } from '../common/http/api-response';
 import { iso8601, routeId } from '../common/http/laravel';
 import { Role } from '../common/roles';
 import { validateBody } from '../common/http/validation';
+import { SubscribedGuard } from '../student/subscribed.guard';
 import { AiService } from './ai.service';
 
 class StartSessionDto {
@@ -33,9 +42,14 @@ const messageJson = (m: {
   created_at: iso8601(m.created_at),
 });
 
-/** /api/v1/student/ai/* — port of Api\V1\Student\AiApiController (throttle:ai, per user). */
+/**
+ * /api/v1/student/ai/* — port of Api\V1\Student\AiApiController (throttle:ai, per user).
+ * security: not in legacy API: every route sits behind the paywall (402), as
+ * the legacy web's `subscribed` middleware did for /student/ai.
+ */
 @Controller('student/ai')
 @Roles(Role.Student)
+@UseGuards(SubscribedGuard)
 export class AiController {
   constructor(private readonly ai: AiService) {}
 

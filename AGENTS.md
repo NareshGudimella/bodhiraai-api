@@ -18,7 +18,8 @@ NestJS 11 + Drizzle ORM (PostgreSQL) port of the legacy Laravel API. It serves `
 | `src/common/http/eloquent.ts` | `toModel(table, row, relations)` / `withPivot(...)`: `Model::toArray()` for raw-model responses (per-table casts and hidden fields); `dirtyFields()` for `fill()->save()` (write only changed columns, keep `updated_at` otherwise); `phpBool()` |
 | `src/storage/` | `StorageService` (R2 / local), upload rules (`FileUploadService` port, content sniffing), `validateWithFile` / `storeOrReject` / `uploadOptions` for multipart routes. `file-url.ts`: signed private-file links (`signedFileUrl`, `unsignFileUrl`); `files.handler.ts`: local `/files/*` |
 | `src/video/` | Not in legacy: `VdoCipherClient` (lesson video upload, OTP, import, delete), `lessonPlayback()`, `GET /lessons/:id/playback` |
-| `src/db/make-files-private.ts` | Cut-over script `npm run files:make-private` (dry run; `--apply`, `--delete-source`) |
+| `src/db/seed.ts`, `src/db/create-super-admin.ts` | `npm run db:seed` (port of the legacy seeders, synthetic data, empty database only) and `npm run user:create-super-admin` |
+| `src/db/make-files-private.ts` | Cut-over script `npm run files:make-private` (dry run; `--apply` copies, verifies, rewrites and deletes each source; `--confirm-production`) |
 | `src/account/` | `/me/profile`, `/me/password` (all roles) |
 | `src/admin/`, `src/super/` | Phase 4 ports (`AdminService`, `SuperAdminService`). `guardSameSchool()` for cross-school 403s; soft-deleted schools are filtered with `LIVE_SCHOOL` |
 | `src/admin/school-web.controller.ts`, `src/super/catalogue.controller.ts` | Phase 4b: endpoints for legacy web-only features (parent links, syllabus opt-in; syllabi, plans, enquiries) |
@@ -77,6 +78,7 @@ Deliberate differences from legacy, each labelled in code; keep them when portin
 - **Mail:** in production only a complete `smtp` configuration (admin panel row, else `MAIL_*`) sends; otherwise `send()` logs an error (never the message) and throws. The app still starts. `mail_settings` is Node-only; the SMTP password is write-only (`password_set` in responses, blank on save keeps it).
 - **AI tutor:** the budget is reserved atomically per user and metered on Claude's reported usage; history is capped at 8000 characters.
 - **Rate limits:** `RateLimit(limit, key, ttlMs)`; `RateLimiter.hit()` adds a second limit (per phone, per IP per hour). Redis errors fall back to in-memory counting.
+- **Gap fixes (2026-11-01):** `GET /video/otp` signs only marketing videos (`VDOCIPHER_VIDEO_ID`, setting `media.home_video_id`, `VDOCIPHER_PUBLIC_VIDEO_IDS`), never an id in `lessons.video_id` (422 `invalid_video_id`, like a malformed id). `SubscribedGuard` (402) also covers `/student/ai/*`, `/student/badges`, `/student/profile` and `/student/profile/report`. Production refuses to start without `PROXY_SECRET`. Tests: `test/gap-fixes.e2e-spec.ts`, `test/tenant-isolation.e2e-spec.ts` (subscription gate).
 - **Protected media (2026-11-01):** private uploads live in the private bucket and are reachable only by signed links (`<FILES_BASE_URL>/files/<key>?exp&sig`, HMAC with `FILE_URL_SECRET`, `FILE_URL_TTL`); keys under `invoices/`, with `..`, `\`, empty segments or a leading `/` are never signed or served. **Production refuses to start without `FILE_URL_SECRET` (32+ chars) and `FILES_BASE_URL`**; elsewhere a development secret is used. Lesson videos go to VdoCipher (`VDOCIPHER_API_SECRET`, `VDOCIPHER_API_BASE`, `VDOCIPHER_OTP_TTL`); without a secret production refuses video uploads, other environments store them privately. `GET /lessons/:id/playback` allows students who may open the lesson (paywall 402 first) and teachers who teach its subject in their school; everyone else 403. Tests: `src/storage/file-url.spec.ts`, `test/protected-media.e2e-spec.ts` (VdoCipher stubbed locally).
 
 ## Commands
@@ -86,9 +88,11 @@ npm run start:dev       # watch mode on :4000 (PORT)
 npm run build           # → dist/
 npm run lint            # eslint --fix + prettier
 npm test                # unit (src/**/*.spec.ts)
-npm run test:e2e        # e2e (test/), needs DATABASE_URL with the seeded schema
+npm run test:e2e        # e2e (test/), needs DATABASE_URL with the imported legacy data (not db:seed)
 npm run db:generate     # after editing src/db/schema.ts → drizzle/NNNN_*.sql
 npm run db:migrate      # apply migrations to DATABASE_URL
+npm run db:seed         # synthetic demo data into an EMPTY database (refuses if users exist or NODE_ENV=production)
+npm run user:create-super-admin -- --email a@b.c --name "Name"  # password: SUPER_ADMIN_PASSWORD or prompt
 npm run files:make-private  # cut-over: dry run; --apply to move private files / import videos
 ```
 

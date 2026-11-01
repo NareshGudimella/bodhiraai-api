@@ -81,6 +81,7 @@ export class StudentController {
   }
 
   @Get('profile')
+  @UseGuards(SubscribedGuard) // security: not in legacy API (legacy web gated it)
   async profile(@CurrentUser() user: users) {
     const summary = await this.service.profileSummary(user);
     const school = user.school_id
@@ -108,6 +109,7 @@ export class StudentController {
    * the student's PDF progress report, always an attachment.
    */
   @Get('profile/report')
+  @UseGuards(SubscribedGuard) // security: not in legacy API (legacy web gated it)
   async profileReport(@CurrentUser() user: users, @Res() res: Response) {
     const { pdf, header } = await this.report.render(user);
     res
@@ -120,6 +122,7 @@ export class StudentController {
   }
 
   @Get('badges')
+  @UseGuards(SubscribedGuard) // security: not in legacy API (legacy web gated it)
   async badges(@CurrentUser() user: users) {
     const c = badgeCollection(await this.service.earnedBadges(user));
     return ok({
