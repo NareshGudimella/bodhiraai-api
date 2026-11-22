@@ -1395,7 +1395,7 @@ async function seedPages(tx: Tx) {
       heading: 'Trusted by schools',
       data: {
         items: [
-          { value: '7+', label: 'Schools' },
+          { value: '321', label: 'Schools' },
           { value: '50k+', label: 'Lessons delivered' },
           { value: '12', label: 'Modules' },
           { value: '99.9%', label: 'Uptime' },
