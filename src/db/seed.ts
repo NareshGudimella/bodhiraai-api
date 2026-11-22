@@ -956,9 +956,8 @@ async function seedCms(tx: Tx, authorId: bigint) {
     ['Courses', '/courses'],
     ['LMS Platform', '/features'],
     ['Success Stories', '/success-stories'],
-    ['Blogs & Articles', '/blog'],
+    // Not in legacy: Blogs & Articles and FAQ live in the website footer (2026 redesign).
     ['Pricing', '/pricing'],
-    ['FAQ', '/faq'],
     ['Contact Us', '/contact'],
   ];
   const footerItems = [
