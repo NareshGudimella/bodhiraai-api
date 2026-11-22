@@ -22,7 +22,12 @@ export const MAIN_IMAGES: Record<string, { path: string; label: string }[]> = {
   ],
   // Not in legacy: photos of the 2026 homepage redesign (bodhiraai-ui public/assets/img/home/).
   'Homepage (2026)': [
-    ['hero-students.jpg', 'Hero classroom photo'],
+    ['hero-banner-1-desktop.webp', 'Hero banner 1 (desktop)'],
+    ['hero-banner-1-mobile.webp', 'Hero banner 1 (mobile)'],
+    ['hero-banner-2-desktop.webp', 'Hero banner 2 (desktop)'],
+    ['hero-banner-2-mobile.webp', 'Hero banner 2 (mobile)'],
+    ['hero-banner-3-desktop.webp', 'Hero banner 3 (desktop)'],
+    ['hero-banner-3-mobile.webp', 'Hero banner 3 (mobile)'],
     ['avatar-1.jpg', 'Hero avatar 1'],
     ['avatar-2.jpg', 'Hero avatar 2'],
     ['avatar-3.jpg', 'Hero avatar 3'],

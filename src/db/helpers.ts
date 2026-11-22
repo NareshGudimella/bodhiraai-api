@@ -115,6 +115,3 @@ export function columnNamed(table: PgTable, name: string): AnyColumn {
   if (!col) throw new Error(`Unknown column: ${name}`);
   return col;
 }
-
-/** The first row or null (Prisma's findFirst on a core select). */
-export const firstOrNull = <T>(rows: T[]): T | null => rows[0] ?? null;

@@ -45,8 +45,35 @@ export const SETTINGS_SCHEMA: Record<
       { key: 'phone', label: 'Phone', type: 'text' },
       { key: 'whatsapp', label: 'WhatsApp', type: 'text' },
       { key: 'address', label: 'Address', type: 'textarea' },
+      // Not in legacy: the website header, footer and contact page read it.
+      { key: 'hours', label: 'Opening hours', type: 'text' },
       { key: 'map_embed', label: 'Google Maps embed', type: 'code' },
     ],
+  },
+  // Not in legacy: business and DPDP details shown on the legal pages, footer and contact page.
+  company: {
+    label: 'Company',
+    icon: 'fa-building',
+    fields: [
+      { key: 'legal_name', label: 'Registered company name', type: 'text' },
+      { key: 'address', label: 'Registered office address', type: 'textarea' },
+      { key: 'cin', label: 'CIN', type: 'text' },
+      { key: 'gstin', label: 'GSTIN', type: 'text' },
+    ],
+  },
+  grievance: {
+    label: 'Grievance Officer',
+    icon: 'fa-user-shield',
+    fields: [
+      { key: 'name', label: 'Name', type: 'text' },
+      { key: 'email', label: 'Email', type: 'text' },
+      { key: 'phone', label: 'Phone', type: 'text' },
+    ],
+  },
+  billing: {
+    label: 'Billing',
+    icon: 'fa-receipt',
+    fields: [{ key: 'email', label: 'Refunds & billing email', type: 'text' }],
   },
   seo: {
     label: 'SEO & Analytics',
