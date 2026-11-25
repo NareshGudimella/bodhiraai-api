@@ -274,7 +274,16 @@ export class JobsService
 
   /** Graceful stop: running jobs finish before the database pool closes (onApplicationShutdown). */
   async beforeApplicationShutdown() {
-    await this.worker?.close();
+    // Graceful (running jobs finish) only while Redis works. Without it (down,
+    // wrong password) no job can finish, and a graceful close would wait until
+    // PM2 kills the process (kill_timeout); close at once instead.
+    const force = this.redis?.status !== 'ready';
+    if (force && this.worker)
+      this.logger.warn(
+        `Redis ${this.redis?.status}: stopping the worker without waiting`,
+      );
+    await this.worker?.close(force);
+    if (force) this.redis?.disconnect();
     await this.queueInstance?.close();
     this.redis?.disconnect();
   }
