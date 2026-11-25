@@ -6,6 +6,7 @@
 # app restarts. The web API still deploys to Elastic Beanstalk with
 # scripts/deploy.sh (SKIP_WORKER=1 there once this workflow owns the worker).
 #
+# Runs only in aveniqinnovations/ba-api (the live repo).
 # GitHub → Settings → Environments → production:
 #   secret   WORKER_SSH_KEY          the deploy user's private key (deploy-only, ed25519)
 #   variable WORKER_SSH_HOST         the worker host's public IP / DNS
@@ -32,7 +33,11 @@ permissions:
 
 jobs:
   deploy:
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    # Deploys only from the live repo; the same workflow in other copies of the repo skips.
+    if: >-
+      github.repository == 'aveniqinnovations/ba-api' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
     runs-on: ubuntu-24.04
     environment: production
     timeout-minutes: 20
