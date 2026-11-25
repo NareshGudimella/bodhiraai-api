@@ -10,6 +10,7 @@ import { Test } from '@nestjs/testing';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { eq, inArray } from 'drizzle-orm';
 import request from 'supertest';
+import { DEV_FILE_URL_SECRET } from '../src/storage/file-url';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { TokenService } from '../src/auth/token.service';
@@ -32,7 +33,8 @@ import { stubIntegrations } from './integrations';
 loadEnv();
 
 const tag = randomBytes(3).toString('hex');
-const SECRET = `e2e-file-url-secret-${tag}-0123456789abcdef`;
+// e2e runs without APP_SECRET (package.json), so links are signed with the dev key.
+const SECRET = DEV_FILE_URL_SECRET;
 const VDO_SECRET = `stub-${tag}`;
 const hex32 = () => randomBytes(16).toString('hex');
 const WEBM = Buffer.concat([
@@ -189,7 +191,6 @@ describe('Protected media (e2e)', () => {
 
     privateDir = await mkdtemp(join(tmpdir(), 'bodhira-private-'));
     setEnv('LOCAL_PRIVATE_DIR', privateDir);
-    setEnv('FILE_URL_SECRET', SECRET);
     setEnv('FILES_BASE_URL', 'http://files.e2e.test');
     setEnv('FILE_URL_TTL', '1800');
     setEnv('VDOCIPHER_API_BASE', stubBase);

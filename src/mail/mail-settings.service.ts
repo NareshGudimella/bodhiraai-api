@@ -24,7 +24,7 @@ export interface MailSettingsInput {
  * API instance applies at once on every instance and the worker.
  * With no row, the `log` mailer applies (production refuses to send). Panel
  * only since 2026-11-25: MAIL_* is not read (`npm run settings:import-env`).
- * The boot check for MAIL_SETTINGS_KEY is in IntegrationSettingsService.
+ * The boot check for APP_SECRET is in IntegrationSettingsService.
  */
 @Injectable()
 export class MailSettingsService {
@@ -47,7 +47,7 @@ export class MailSettingsService {
         // Wrong or missing key: send without a password (the SMTP server will
         // refuse) rather than quietly using different credentials.
         this.logger.error(
-          'The stored SMTP password could not be decrypted: check MAIL_SETTINGS_KEY.',
+          'The stored SMTP password could not be decrypted: check APP_SECRET.',
         );
       }
     }

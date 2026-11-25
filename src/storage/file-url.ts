@@ -1,3 +1,4 @@
+import { derivedKey } from '../config/app-secret';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 /**
@@ -9,10 +10,12 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  *
  *     <FILES_BASE_URL>/files/<key>?exp=<unix seconds>&sig=<sig>
  *
- * with sig = base64url(HMAC-SHA256(FILE_URL_SECRET, "<key>\n<exp>")). The
+ * with sig = base64url(HMAC-SHA256(<file-urls key>, "<key>\n<exp>")). The
  * edge Worker (production) and this API (local, see files.handler.ts) check it.
  *
- * Fail closed: in production the API refuses to start without FILE_URL_SECRET
+ * The key is derived from APP_SECRET (purpose `file-urls`; the edge Worker's
+ * file-link key is the same value, derived from APP_SECRET there).
+ * Fail closed: in production the API refuses to start without APP_SECRET
  * (assertFileUrlConfig in main.ts), and fileUrlSecret() throws as well, so
  * nothing is ever signed with the development default.
  */
@@ -20,29 +23,21 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 /** Value prefix of a private file in the database. */
 export const FILES_PREFIX = '/files/';
 
-/** Development-only secret, used outside production when FILE_URL_SECRET is unset. */
+/** Development-only secret, used outside production when APP_SECRET is unset. */
 export const DEV_FILE_URL_SECRET =
   'bodhira-dev-file-url-secret-not-for-production';
 
 const DEFAULT_TTL = 1800;
 /** The server rejects links that expire more than 24 h ahead. */
 export const MAX_AHEAD = 86_400;
-const MIN_SECRET_LENGTH = 32;
 
 type Env = Record<string, string | undefined>;
 
 const isProduction = (env: Env) => env.NODE_ENV === 'production';
 
-/** The HMAC key. Throws in production when FILE_URL_SECRET is missing or short. */
+/** The HMAC key. Throws in production when APP_SECRET is missing or short. */
 export function fileUrlSecret(env: Env = process.env): string {
-  const secret = env.FILE_URL_SECRET?.trim();
-  if (secret && (secret.length >= MIN_SECRET_LENGTH || !isProduction(env)))
-    return secret;
-  if (isProduction(env))
-    throw new Error(
-      `FILE_URL_SECRET must be set (at least ${MIN_SECRET_LENGTH} characters) in production`,
-    );
-  return DEV_FILE_URL_SECRET;
+  return derivedKey('file-urls', env) ?? DEV_FILE_URL_SECRET;
 }
 
 /** Called at boot: in production, refuse to start without a usable secret and base URL. */

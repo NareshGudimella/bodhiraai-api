@@ -138,10 +138,9 @@ describe('Background jobs with Redis (e2e)', () => {
     setEnv('BULLMQ_PREFIX', PREFIX);
     setEnv('LOCAL_PRIVATE_DIR', privateDir);
     setEnv('STORAGE_DRIVER', 'local');
-    setEnv('FILE_URL_SECRET', `e2e-jobs-secret-${tag}-0123456789abcdef`);
     setEnv('FILES_BASE_URL', 'http://files.e2e.test');
     setEnv('VDOCIPHER_API_BASE', stubBase);
-    setEnv('PROXY_SECRET', undefined);
+    setEnv('APP_SECRET', undefined);
 
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],

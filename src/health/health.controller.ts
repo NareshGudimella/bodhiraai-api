@@ -20,13 +20,13 @@ export class HealthController {
 
   /**
    * security: not in legacy. The deep check writes to the database, so it is
-   * for the Worker, the web server and monitoring that hold PROXY_SECRET. With
-   * no PROXY_SECRET configured it is open outside production (local runs).
+   * for the Worker, the web server and monitoring that hold the proxy secret. With
+   * no APP_SECRET configured it is open outside production (local runs).
    */
   private deepAllowed(req: Request) {
     if ((req as Request & { proxyAuthenticated?: boolean }).proxyAuthenticated)
       return true;
-    return !process.env.PROXY_SECRET && process.env.NODE_ENV !== 'production';
+    return !process.env.APP_SECRET && process.env.NODE_ENV !== 'production';
   }
 
   /** Public liveness: `{ status }` only, from a read-only `select 1`. */
@@ -91,7 +91,7 @@ export class HealthController {
       const ok = row?.value === 's:1:"1";';
       checks.cache = {
         status: ok ? 'ok' : 'degraded',
-        driver: process.env.CACHE_STORE ?? 'database',
+        driver: 'database', // legacy reported config('cache.default'); this API's cache is always the database table
       };
       if (!ok) allOk = false;
     } catch (e) {

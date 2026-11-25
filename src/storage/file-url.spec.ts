@@ -1,4 +1,5 @@
 import { createHmac } from 'node:crypto';
+import { derivedKey } from '../config/app-secret';
 import {
   assertFileUrlConfig,
   decodeKey,
@@ -14,10 +15,12 @@ import {
   verifyFileSignature,
 } from './file-url';
 
-const SECRET = 'unit-test-secret-0123456789abcdef0123456789';
+const APP_SECRET = Buffer.alloc(32, 5).toString('base64');
+/** The HMAC key: derived from APP_SECRET (the edge Worker's FILE_URL_SECRET). */
+const SECRET = derivedKey('file-urls', { APP_SECRET })!;
 const env = {
   NODE_ENV: 'test',
-  FILE_URL_SECRET: SECRET,
+  APP_SECRET,
   FILES_BASE_URL: 'https://site.test/',
   FILE_URL_TTL: '1800',
 };
@@ -88,7 +91,10 @@ describe('signed file links (security: not in legacy)', () => {
     expect(check(key, [exp], sig)).toBe(false);
     expect(check(key, exp, `${sig}=`)).toBe(false);
     expect(
-      check(key, exp, sig, { ...env, FILE_URL_SECRET: `${SECRET}x` }),
+      check(key, exp, sig, {
+        ...env,
+        APP_SECRET: Buffer.alloc(32, 6).toString('base64'),
+      }),
     ).toBe(false);
   });
 
@@ -182,24 +188,24 @@ describe('signed file links (security: not in legacy)', () => {
       DEV_FILE_URL_SECRET,
     );
     expect(() => fileUrlSecret({ NODE_ENV: 'production' })).toThrow(
-      /FILE_URL_SECRET/,
+      /APP_SECRET/,
     );
     expect(() =>
-      fileUrlSecret({ NODE_ENV: 'production', FILE_URL_SECRET: 'short' }),
-    ).toThrow();
+      fileUrlSecret({ NODE_ENV: 'production', APP_SECRET: 'short' }),
+    ).toThrow(/32 bytes/);
     expect(() =>
       signFileKey('a/b.png', {
         env: { NODE_ENV: 'production', FILES_BASE_URL: 'https://x' },
       }),
-    ).toThrow(/FILE_URL_SECRET/);
+    ).toThrow(/APP_SECRET/);
     expect(() => assertFileUrlConfig({ NODE_ENV: 'production' })).toThrow();
     expect(() =>
-      assertFileUrlConfig({ NODE_ENV: 'production', FILE_URL_SECRET: SECRET }),
+      assertFileUrlConfig({ NODE_ENV: 'production', APP_SECRET }),
     ).toThrow(/FILES_BASE_URL/);
     expect(() =>
       assertFileUrlConfig({
         NODE_ENV: 'production',
-        FILE_URL_SECRET: SECRET,
+        APP_SECRET,
         FILES_BASE_URL: 'https://site.test',
       }),
     ).not.toThrow();

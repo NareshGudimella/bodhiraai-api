@@ -19,7 +19,7 @@
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
     "test:cov": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --testPathIgnorePatterns=serial-e2e && node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --runInBand serial-e2e",
+    "test:e2e": "APP_SECRET= node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --testPathIgnorePatterns=serial-e2e && APP_SECRET= node --experimental-vm-modules node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --runInBand serial-e2e",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "ts-node --transpile-only src/db/seed.ts",

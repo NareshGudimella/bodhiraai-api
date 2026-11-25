@@ -453,10 +453,10 @@ describe('Super admin integrations (e2e)', () => {
     expect(logs.at(-1)?.changes).toContain('api_secret');
   });
 
-  it('production refuses to start without MAIL_SETTINGS_KEY once a secret is stored', async () => {
+  it('production refuses to start without APP_SECRET once a secret is stored', async () => {
     const svc = new IntegrationSettingsService(db);
     setEnv('NODE_ENV', 'production');
-    setEnv('MAIL_SETTINGS_KEY', undefined);
+    setEnv('APP_SECRET', undefined);
     try {
       await expect(svc.onModuleInit()).rejects.toThrow(/refusing to start/);
     } finally {

@@ -87,7 +87,7 @@ export class MailSettingsController {
     } catch (e) {
       if (e instanceof MailKeyError) {
         throw new ApiException(
-          "The SMTP password can't be stored: MAIL_SETTINGS_KEY is not configured correctly on the server.",
+          "The SMTP password can't be stored: APP_SECRET is not configured correctly on the server.",
           503,
           'mail_key_missing',
         );

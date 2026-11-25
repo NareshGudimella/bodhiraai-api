@@ -5,7 +5,7 @@
  * step. The API no longer reads these variables.
  *
  *   npm run settings:import-env               dry run: prints what would be saved (secrets as "(set)")
- *   npm run settings:import-env -- --apply    saves; needs MAIL_SETTINGS_KEY when a secret is copied
+ *   npm run settings:import-env -- --apply    saves; needs APP_SECRET when a secret is copied
  *
  * A provider that already has saved settings is skipped (the panel wins), and
  * so is one with nothing set in the environment. Each save is audited.

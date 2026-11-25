@@ -6,7 +6,7 @@ import type { MailSettingsService } from './mail-settings.service';
 const KEY = Buffer.alloc(32, 7).toString('base64');
 
 describe('mail-crypto', () => {
-  const env = { NODE_ENV: 'test', MAIL_SETTINGS_KEY: KEY };
+  const env = { NODE_ENV: 'test', APP_SECRET: KEY };
 
   it('round-trips and never stores plaintext', () => {
     const stored = encryptSecret('s3cret-pässword', env);
@@ -17,17 +17,17 @@ describe('mail-crypto', () => {
     expect(encryptSecret('s3cret-pässword', env)).not.toBe(stored);
   });
 
-  it('accepts a 64-hex key and rejects tampering or the wrong key', () => {
-    const hex = { NODE_ENV: 'test', MAIL_SETTINGS_KEY: 'ab'.repeat(32) };
+  it('accepts a hex APP_SECRET and rejects tampering or the wrong key', () => {
+    const hex = { NODE_ENV: 'test', APP_SECRET: 'ab'.repeat(32) };
     expect(decryptSecret(encryptSecret('x', hex), hex)).toBe('x');
     const stored = encryptSecret('x', env);
     expect(() => decryptSecret(stored, hex)).toThrow();
     expect(() => decryptSecret(stored.slice(0, -2) + 'AA', env)).toThrow();
   });
 
-  it('requires a 32-byte key; only development may omit it', () => {
+  it('requires a 32-byte APP_SECRET; only development may omit it', () => {
     expect(() =>
-      mailKey({ NODE_ENV: 'production', MAIL_SETTINGS_KEY: 'short' }),
+      mailKey({ NODE_ENV: 'production', APP_SECRET: 'short' }),
     ).toThrow(/32 bytes/);
     expect(() => mailKey({ NODE_ENV: 'production' })).toThrow(/not set/);
     expect(mailKey({ NODE_ENV: 'development' })).toHaveLength(32);

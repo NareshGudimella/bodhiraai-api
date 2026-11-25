@@ -739,7 +739,7 @@ describe('Security hardening (e2e)', () => {
       expect(deep.body.checks.db.error).toBeUndefined();
 
       setEnv('NODE_ENV', 'production');
-      setEnv('PROXY_SECRET', undefined);
+      setEnv('APP_SECRET', undefined);
       const live = await http().get('/health').expect(200);
       expect(live.body).toEqual({ status: 'ok' });
       setEnv('NODE_ENV', 'test');

@@ -9,16 +9,16 @@ import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { configureApp } from './app.setup';
-import { assertProxyConfig } from './common/http/client-ip';
+import { assertAppSecret } from './config/app-secret';
 import { assertFileUrlConfig } from './storage/file-url';
 import { Logger } from '@nestjs/common';
 import { runWorker } from './worker';
 
 async function bootstrap() {
   // security: not in legacy. Fail closed: production refuses to start without
-  // FILE_URL_SECRET/FILES_BASE_URL (signed private-file links) or PROXY_SECRET.
+  // APP_SECRET (settings encryption, signed file links, the proxy secret) or FILES_BASE_URL.
+  assertAppSecret();
   assertFileUrlConfig();
-  assertProxyConfig();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   configureApp(app);
   await app.listen(Number(process.env.PORT ?? 4000));

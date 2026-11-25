@@ -110,7 +110,7 @@ export class IntegrationsController {
     } catch (e) {
       if (e instanceof MailKeyError)
         throw new ApiException(
-          "Secrets can't be stored: MAIL_SETTINGS_KEY is not configured correctly on the server.",
+          "Secrets can't be stored: APP_SECRET is not configured correctly on the server.",
           503,
           'settings_key_missing',
         );

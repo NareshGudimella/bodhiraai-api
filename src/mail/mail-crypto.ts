@@ -1,35 +1,26 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { AppSecretError, derivedKey } from '../config/app-secret';
 
 // not in legacy: AES-256-GCM for the secrets stored in the database: the SMTP
 // password in `mail_settings` and the provider secrets in `integration_settings`.
-// Stored as `v1:<iv>.<tag>.<ciphertext>` (base64url). The key is MAIL_SETTINGS_KEY:
-// 32 bytes as 64 hex characters or base64 (`openssl rand -base64 32`).
+// Stored as `v1:<iv>.<tag>.<ciphertext>` (base64url). The key is derived from
+// APP_SECRET (src/config/app-secret.ts, purpose `settings`).
 
 const PREFIX = 'v1:';
 
-/** Fixed key for development and tests only; production must set MAIL_SETTINGS_KEY. */
+/** Fixed key for development and tests only (APP_SECRET unset); production must set APP_SECRET. */
 const DEV_KEY = Buffer.alloc(32, 'bodhira-dev-mail-settings-key');
 
 export class MailKeyError extends Error {}
 
-/** The 32-byte key from MAIL_SETTINGS_KEY (a development key outside production when unset). */
+/** The 32-byte settings key from APP_SECRET (a development key outside production when unset). */
 export function mailKey(env: NodeJS.ProcessEnv = process.env): Buffer {
-  const raw = env.MAIL_SETTINGS_KEY?.trim();
-  if (!raw) {
-    if (env.NODE_ENV === 'production') {
-      throw new MailKeyError('MAIL_SETTINGS_KEY is not set.');
-    }
-    return DEV_KEY;
+  try {
+    const key = derivedKey('settings', env);
+    return key ? Buffer.from(key, 'hex') : DEV_KEY;
+  } catch (e) {
+    throw new MailKeyError(e instanceof AppSecretError ? e.message : String(e));
   }
-  const key = /^[0-9a-fA-F]{64}$/.test(raw)
-    ? Buffer.from(raw, 'hex')
-    : Buffer.from(raw, 'base64');
-  if (key.length !== 32) {
-    throw new MailKeyError(
-      'MAIL_SETTINGS_KEY must be 32 bytes (64 hex characters or base64).',
-    );
-  }
-  return key;
 }
 
 export function encryptSecret(

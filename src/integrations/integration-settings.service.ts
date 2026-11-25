@@ -21,7 +21,7 @@ import {
  * Read from the database on every use (a primary-key lookup), like
  * `MailSettingsService`: a save on one API instance applies at once on every
  * instance and the worker, with no cache to invalidate.
- * Secrets are AES-256-GCM with MAIL_SETTINGS_KEY (`mail-crypto.ts`).
+ * Secrets are AES-256-GCM with a key derived from APP_SECRET (`mail-crypto.ts`).
  */
 @Injectable()
 export class IntegrationSettingsService implements OnModuleInit {
@@ -31,7 +31,7 @@ export class IntegrationSettingsService implements OnModuleInit {
 
   /**
    * security: not in legacy. Production refuses to start without a valid
-   * MAIL_SETTINGS_KEY once any secret is stored (mail password included):
+   * APP_SECRET once any secret is stored (mail password included):
    * the app would otherwise run with providers silently unusable.
    */
   async onModuleInit() {
@@ -80,7 +80,7 @@ export class IntegrationSettingsService implements OnModuleInit {
         } catch {
           // Wrong key or tampered value: treat as unset, never as another value.
           this.logger.error(
-            `The stored ${p}.${name} could not be decrypted: check MAIL_SETTINGS_KEY.`,
+            `The stored ${p}.${name} could not be decrypted: check APP_SECRET.`,
           );
         }
       } else if (row && name in row.settings) {

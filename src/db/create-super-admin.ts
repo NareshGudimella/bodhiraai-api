@@ -3,8 +3,8 @@
  * creates an active super admin (no school), the first real account of a fresh
  * database (staging, or production before data is imported).
  *
- * The password comes from SUPER_ADMIN_PASSWORD, else it is asked for on the
- * terminal (not echoed), else read from the first line of stdin. It is never
+ * The password is asked for on the terminal (not echoed), else read from the
+ * first line of stdin. It is never
  * printed or logged. At least 12 characters (security: not in legacy; the
  * account can do everything). Stored as `$2y$` bcrypt like every other user.
  * Refuses an email that already belongs to a user.
@@ -106,7 +106,7 @@ async function main() {
     throw new Error(
       'Usage: npm run user:create-super-admin -- --email <email> --name "<name>"',
     );
-  const password = process.env.SUPER_ADMIN_PASSWORD || (await readPassword());
+  const password = await readPassword();
   const db = createDb();
   try {
     const id = await createSuperAdmin(db, {
