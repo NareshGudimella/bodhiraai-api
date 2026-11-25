@@ -1,4 +1,5 @@
 import {
+  OnApplicationBootstrap,
   Global,
   Injectable,
   Logger,
@@ -43,6 +44,27 @@ export const JOB_POLICY: Record<JobName, { attempts: number; delay: number }> =
 export const QUEUE_NAME = 'jobs';
 
 /** Error text for logs: one line, bounded, email addresses masked. */
+/** host:port/db of a Redis URL, without the password (for logs). */
+export function redisTarget(url: string | null): string {
+  if (!url) return 'none';
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.hostname}:${u.port || 6379}${u.pathname && u.pathname !== '/' ? u.pathname : ''}`;
+  } catch {
+    return 'an invalid REDIS_URL';
+  }
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`no answer in ${ms} ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 export function logSafe(e: unknown): string {
   const text = (e instanceof Error ? e.message : String(e))
     .replace(/[^\s@<>"'(),;:]+@[^\s@<>"'(),;:]+/g, '[email]')
@@ -52,7 +74,9 @@ export function logSafe(e: unknown): string {
 }
 
 @Injectable()
-export class JobsService implements BeforeApplicationShutdown {
+export class JobsService
+  implements BeforeApplicationShutdown, OnApplicationBootstrap
+{
   private readonly logger = new Logger('Jobs');
   private readonly handlers = new Map<JobName, Handler>();
   private readonly url = process.env.REDIS_URL || null;
@@ -68,14 +92,57 @@ export class JobsService implements BeforeApplicationShutdown {
   private queueInstance: Queue | null = null;
   private worker: Worker | null = null;
   private lastWarning = 0;
+  /** The last connection error, for the startup line (ioredis' own retry error hides it). */
+  private lastError: unknown = null;
 
   constructor() {
+    // not in legacy: a line when the connection comes back or drops after start.
+    this.redis?.on('ready', () => {
+      if (this.lastWarning)
+        this.logger.log(`Redis reconnected (${redisTarget(this.url)})`);
+      this.lastWarning = 0;
+    });
     this.redis?.on('error', (e: Error) => {
+      this.lastError = e;
       // At most one line a minute while Redis is down.
       if (Date.now() - this.lastWarning < 60_000) return;
       this.lastWarning = Date.now();
       this.logger.warn(`Redis unavailable for jobs: ${logSafe(e)}`);
     });
+  }
+
+  /**
+   * not in legacy: at start (web and worker), log whether Redis answers, so a
+   * wrong REDIS_URL or password shows in the first lines of the log. Never fails
+   * the start: without Redis, jobs run inline and rate limits count in memory.
+   */
+  async onApplicationBootstrap() {
+    if (!this.redis) {
+      this.logger.log(
+        'Redis: not configured (REDIS_URL unset): jobs run inline, rate limits in memory',
+      );
+      return;
+    }
+    const target = redisTarget(this.url);
+    const started = Date.now();
+    try {
+      const info = await withTimeout(this.redis.info(), 5000);
+      const field = (k: string) =>
+        new RegExp(`^${k}:(.*)$`, 'm').exec(info)?.[1]?.trim() ?? '?';
+      const policy = field('maxmemory_policy');
+      this.logger.log(
+        `Redis: connected ${target} in ${Date.now() - started} ms (redis ${field('redis_version')}, maxmemory-policy ${policy}, prefix ${this.prefix})`,
+      );
+      if (policy !== 'noeviction' && policy !== '?')
+        this.logger.warn(
+          `Redis: maxmemory-policy is ${policy}; BullMQ needs noeviction or queued jobs can be lost`,
+        );
+    } catch (e) {
+      this.lastWarning = Date.now();
+      this.logger.error(
+        `Redis: unreachable at ${target} (${logSafe(this.lastError ?? e)}): jobs run inline and rate limits count per instance until it is back`,
+      );
+    }
   }
 
   /** True when jobs go to Redis (REDIS_URL); false: they run inline. */
