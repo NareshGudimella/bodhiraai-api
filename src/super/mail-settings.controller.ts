@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Inject,
@@ -104,6 +105,23 @@ export class MailSettingsController {
       password_changed: result.password_changed, // never the password itself
     });
     return ok(await this.settings.view(), 'Mail settings saved.');
+  }
+
+  /** not in legacy: the explicit "clear" for the write-only password. */
+  @Delete('password')
+  async clearPassword(
+    @CurrentUser() user: users,
+    @Client() client: ClientInfo,
+  ) {
+    const cleared = await this.settings.clearPassword(user.id);
+    if (cleared)
+      await this.audit.log(
+        user,
+        client,
+        'mail_settings.password_cleared',
+        SUBJECT,
+      );
+    return ok(await this.settings.view(), 'SMTP password cleared.');
   }
 
   /** Sends with the saved settings. A failure is a 200 with `sent: false` and the sanitised SMTP error. */

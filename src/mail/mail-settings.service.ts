@@ -1,10 +1,10 @@
-import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import { DB, type Db } from '../db/db';
 import { mail_settings } from '../db/schema';
 import type { mail_settings as MailSettingsRow } from '../db/types';
-import { envMailConfig, type MailConfig } from './mail-config';
-import { decryptSecret, encryptSecret, mailKey } from './mail-crypto';
+import { defaultMailConfig, type MailConfig } from './mail-config';
+import { decryptSecret, encryptSecret } from './mail-crypto';
 
 export interface MailSettingsInput {
   mailer: 'smtp' | 'log';
@@ -18,36 +18,19 @@ export interface MailSettingsInput {
   from_name: string | null;
 }
 
-/** Re-read the row at least this often, so other instances pick up a save. */
-const CACHE_MS = 60_000;
-
 /**
- * not in legacy: outgoing-mail settings stored in `mail_settings` (one row),
- * cached in memory (dropped on save here, and every minute for other instances).
- * With no row, the MAIL_* environment applies, so existing deploys keep working.
+ * not in legacy: outgoing-mail settings stored in `mail_settings` (one row).
+ * Read on every send (a primary-key lookup; mail is rare), so a save on one
+ * API instance applies at once on every instance and the worker.
+ * With no row, the `log` mailer applies (production refuses to send). Panel
+ * only since 2026-11-25: MAIL_* is not read (`npm run settings:import-env`).
+ * The boot check for MAIL_SETTINGS_KEY is in IntegrationSettingsService.
  */
 @Injectable()
-export class MailSettingsService implements OnModuleInit {
+export class MailSettingsService {
   private readonly logger = new Logger('MailSettings');
-  private cache: { at: number; cfg: MailConfig } | null = null;
 
   constructor(@Inject(DB) private readonly db: Db) {}
-
-  onModuleInit() {
-    if (process.env.NODE_ENV === 'production') {
-      try {
-        mailKey();
-      } catch (e) {
-        this.logger.warn(
-          `${(e as Error).message} The SMTP password can't be saved in the admin panel until it is set.`,
-        );
-      }
-    }
-  }
-
-  invalidate() {
-    this.cache = null;
-  }
 
   private row(): Promise<MailSettingsRow | undefined> {
     return this.db.query.mail_settings.findFirst({
@@ -81,32 +64,27 @@ export class MailSettingsService implements OnModuleInit {
     };
   }
 
-  /** The configuration in effect: the saved row, else the environment. */
+  /** The configuration in effect: the saved row, else the defaults. */
   async effective(): Promise<MailConfig> {
-    if (this.cache && Date.now() - this.cache.at < CACHE_MS) {
-      return this.cache.cfg;
-    }
     const row = await this.row();
-    const cfg = row ? this.toConfig(row) : envMailConfig();
-    this.cache = { at: Date.now(), cfg };
-    return cfg;
+    return row ? this.toConfig(row) : defaultMailConfig();
   }
 
   /** What the admin form shows. Never includes the password. */
   async view() {
     const row = await this.row();
     if (!row) {
-      const env = envMailConfig();
+      const d = defaultMailConfig();
       return {
-        source: 'env' as const,
-        mailer: env.mailer === 'smtp' ? 'smtp' : 'log',
-        host: env.host,
-        port: env.port,
-        encryption: env.encryption,
-        username: env.username,
-        password_set: !!env.password,
-        from_address: env.fromAddress,
-        from_name: env.fromName || null,
+        source: 'none' as const,
+        mailer: 'log',
+        host: d.host,
+        port: d.port,
+        encryption: d.encryption,
+        username: d.username,
+        password_set: false,
+        from_address: d.fromAddress,
+        from_name: d.fromName,
         updated_at: null,
         updated_by: null,
       };
@@ -127,18 +105,11 @@ export class MailSettingsService implements OnModuleInit {
   }
 
   /** Upserts the row. Returns whether the password changed. */
-  async save(input: MailSettingsInput, userId: bigint) {
+  async save(input: MailSettingsInput, userId: bigint | null) {
     const existing = await this.row();
     let password_enc = existing?.password_enc ?? null;
     if (input.password) {
       password_enc = encryptSecret(input.password); // MailKeyError without a key
-    } else if (!existing && process.env.MAIL_PASSWORD) {
-      // First save: keep the password the environment was using.
-      try {
-        password_enc = encryptSecret(process.env.MAIL_PASSWORD);
-      } catch {
-        password_enc = null;
-      }
     }
     const values = {
       mailer: input.mailer,
@@ -156,7 +127,17 @@ export class MailSettingsService implements OnModuleInit {
       .insert(mail_settings)
       .values({ id: 1, ...values })
       .onConflictDoUpdate({ target: mail_settings.id, set: values });
-    this.invalidate();
     return { password_changed: !!input.password };
+  }
+
+  /** not in legacy: removes the stored SMTP password. Returns false when none was stored. */
+  async clearPassword(userId: bigint) {
+    const row = await this.row();
+    if (!row?.password_enc) return false;
+    await this.db
+      .update(mail_settings)
+      .set({ password_enc: null, updated_by: userId, updated_at: new Date() })
+      .where(eq(mail_settings.id, 1));
+    return true;
   }
 }

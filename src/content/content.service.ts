@@ -164,6 +164,8 @@ export class ContentService {
         thumbnail: str('thumbnail'),
         content_url: str('content_url'),
         video_id: str('video_id'), // security: not in legacy (VdoCipher)
+        video_status: str('video_status'), // not in legacy (video-import job)
+        video_upload_key: str('video_upload_key'),
         content_body: str('content_body'),
         duration_sec: int(data.duration_sec),
         sort_order: int(data.sort_order ?? (top ?? 0) + 1),
@@ -185,6 +187,8 @@ export class ContentService {
       thumbnail: keep('thumbnail'),
       content_url: keep('content_url'),
       video_id: keep('video_id'), // security: not in legacy (VdoCipher)
+      video_status: keep('video_status'), // not in legacy (video-import job)
+      video_upload_key: keep('video_upload_key'),
       content_body: keep('content_body'),
       duration_sec: int(data.duration_sec ?? lesson.duration_sec),
       sort_order: int(data.sort_order ?? lesson.sort_order),

@@ -7,12 +7,16 @@ import { eq, sql } from 'drizzle-orm';
 import { DB, type Db } from '../db/db';
 import { cache } from '../db/schema';
 import { redisThrottlerStorage } from '../common/http/redis-throttler-storage';
+import { JobsService, logSafe } from '../jobs/jobs.service';
 
 @Controller()
 export class HealthController {
   private readonly logger = new Logger('Health');
 
-  constructor(@Inject(DB) private readonly db: Db) {}
+  constructor(
+    @Inject(DB) private readonly db: Db,
+    private readonly jobs: JobsService,
+  ) {}
 
   /**
    * security: not in legacy. The deep check writes to the database, so it is
@@ -106,6 +110,18 @@ export class HealthController {
       } catch (e) {
         this.logger.error(`Redis check failed: ${(e as Error).message}`);
         checks.redis = { status: 'down' };
+        allOk = false;
+      }
+    }
+
+    // Added (not in legacy): the job queue, when REDIS_URL is set. Counts are
+    // informational (alert on `failed` growing, or `waiting` with no worker).
+    if (this.jobs.queued) {
+      try {
+        checks.queue = { status: 'ok', ...(await this.jobs.counts()) };
+      } catch (e) {
+        this.logger.error(`Queue check failed: ${logSafe(e)}`);
+        checks.queue = { status: 'down' };
         allOk = false;
       }
     }

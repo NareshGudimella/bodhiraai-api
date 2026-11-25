@@ -14,6 +14,7 @@ import { RolesGuard } from './common/guards/roles.guard';
 import { TokenAuthGuard } from './common/guards/token-auth.guard';
 import { TransformRequestMiddleware } from './common/http/transform-request.middleware';
 import { HealthController } from './health/health.controller';
+import { JobsModule } from './jobs/jobs.service';
 import { LiveClassModule } from './live-class/live-class.module';
 import { MailModule } from './mail/mail.module';
 import { NotificationModule } from './notification/notification.module';
@@ -25,6 +26,7 @@ import { ContentModule } from './content/content.module';
 import { StudentModule } from './student/student.module';
 import { TeacherModule } from './teacher/teacher.module';
 import { VideoModule } from './video/video.module';
+import { IntegrationsModule } from './integrations/integrations.module';
 
 @Module({
   imports: [
@@ -38,6 +40,8 @@ import { VideoModule } from './video/video.module';
     }),
     RateLimiterModule,
     DbModule,
+    IntegrationsModule,
+    JobsModule,
     StorageModule,
     MailModule,
     NotificationModule,

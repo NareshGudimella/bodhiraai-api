@@ -23,16 +23,17 @@ export function requireEnv(name: string): string {
 
 export const isDevelopment = () => process.env.NODE_ENV === 'development';
 
-const TRUE = new Set(['1', 'true', 'yes', 'on']);
-
 /**
- * security: not in legacy. Phone OTP sign-in (`/auth/otp/*`) is off in
- * production unless OTP_LOGIN_ENABLED is set to 1/true: no SMS provider is
- * wired, so a code could never reach its owner. Elsewhere it defaults to on
- * (development returns the code in the response); set 0/false to turn it off.
+ * security: not in legacy. How phone OTP sign-in (`/auth/otp/*`) delivers its
+ * code: `sms` when MSG91 is configured and enabled (Integrations → SMS);
+ * otherwise outside production `dev` (no SMS; development returns the code in
+ * the response); in production `null`: the feature is off (503), since a code
+ * could never reach its owner. Replaces OTP_LOGIN_ENABLED (2026-11-25).
  */
-export function otpLoginEnabled(env = process.env): boolean {
-  const flag = env.OTP_LOGIN_ENABLED?.trim().toLowerCase();
-  if (flag) return TRUE.has(flag);
-  return env.NODE_ENV !== 'production';
+export function otpDelivery(
+  smsActive: boolean,
+  env = process.env,
+): 'sms' | 'dev' | null {
+  if (smsActive) return 'sms';
+  return env.NODE_ENV === 'production' ? null : 'dev';
 }

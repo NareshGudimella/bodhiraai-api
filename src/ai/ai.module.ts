@@ -7,6 +7,6 @@ import { SubscriptionAccessService } from '../student/subscription-access.servic
 @Module({
   controllers: [AiController],
   providers: [AiService, ClaudeClient, SubscriptionAccessService],
-  exports: [AiService],
+  exports: [AiService, ClaudeClient],
 })
 export class AiModule {}

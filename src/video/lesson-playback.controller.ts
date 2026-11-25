@@ -34,7 +34,8 @@ const CANT_PLAY = "You can't play this lesson.";
  *    (AdminContentService.mayWatch); watermarked with their name and email.
  *  - Everyone else (super admins, parents, …): 403.
  *
- * 404 when the lesson doesn't exist or has no video. VdoCipher videos get an
+ * 404 when the lesson doesn't exist or has no video; 409 `video_processing`
+ * while an upload is being imported (not in legacy). VdoCipher videos get an
  * OTP watermarked with the viewer's name and phone/email; other videos a
  * (signed) URL. 60 requests a minute per user.
  */
@@ -79,8 +80,15 @@ export class LessonPlaybackController {
           : false;
     if (!allowed) throw new ApiException(CANT_PLAY, 403);
 
+    // not in legacy: an upload the worker is still sending to VdoCipher.
+    if (lesson.video_status === 'processing')
+      throw new ApiException(
+        'This video is still processing. Please try again in a few minutes.',
+        409,
+        'video_processing',
+      );
     if (lesson.video_id) {
-      if (!this.vdo.configured())
+      if (!(await this.vdo.configured()))
         throw new ApiException('Video playback is not available.', 503);
       // An admin's watermark is their name and email (not in legacy, 2026-11-01).
       const contact =

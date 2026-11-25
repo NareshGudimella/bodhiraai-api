@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
-// not in legacy: AES-256-GCM for the SMTP password stored in `mail_settings`.
+// not in legacy: AES-256-GCM for the secrets stored in the database: the SMTP
+// password in `mail_settings` and the provider secrets in `integration_settings`.
 // Stored as `v1:<iv>.<tag>.<ciphertext>` (base64url). The key is MAIL_SETTINGS_KEY:
 // 32 bytes as 64 hex characters or base64 (`openssl rand -base64 32`).
 

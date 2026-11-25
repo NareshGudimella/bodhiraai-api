@@ -7,6 +7,7 @@ import { invoices as invoicesTable, users as usersTable } from '../db/schema';
 import type { invoices, plans, subscriptions, users } from '../db/types';
 import { dirtyFields } from '../common/http/eloquent';
 import { numberFormat, phpRound } from '../common/http/laravel';
+import { JobsService, logSafe } from '../jobs/jobs.service';
 import { MailService } from '../mail/mail.service';
 import { StorageService } from '../storage/storage.service';
 import { TAX_RATE_BPS, pricePaiseFor } from './billing.constants';
@@ -21,7 +22,12 @@ export class InvoiceService {
     @Inject(DB) private readonly db: Db,
     private readonly storage: StorageService,
     private readonly mail: MailService,
-  ) {}
+    private readonly jobs: JobsService,
+  ) {
+    jobs.handle('invoice', (d: { invoice: string }, { final }) =>
+      this.deliver(BigInt(d.invoice), !final),
+    );
+  }
 
   /** Invoice::nextNumber(): BDH-INV-<year>-<5-digit sequence>. */
   async nextNumber() {
@@ -74,15 +80,23 @@ export class InvoiceService {
     return row;
   }
 
-  /** Mark an invoice paid, link the payment, and generate the PDF + email. */
+  /**
+   * Mark an invoice paid, link the payment, and generate the PDF + email.
+   * not in legacy: with REDIS_URL the PDF and email are an `invoice` job, so
+   * the returned row has no `pdf_path` yet (the download renders it on demand
+   * meanwhile); without it they happen here, before returning, as before.
+   */
   async markPaid(invoice: invoices, paymentId: bigint | null = null) {
     invoice = await this.save(invoice, {
       status: 'paid',
       paid_at: new Date(),
       payment_id: paymentId,
     });
-    invoice = await this.generatePdf(invoice);
-    await this.emailInvoice(invoice);
+    await this.jobs.run(
+      'invoice',
+      { invoice: String(invoice.id) },
+      { jobId: `invoice-${invoice.id}`, inline: 'await' },
+    );
     const fresh = await this.db.query.invoices.findFirst({
       where: eq(invoicesTable.id, invoice.id),
     });
@@ -91,11 +105,26 @@ export class InvoiceService {
   }
 
   /**
+   * The `invoice` job: the PDF, then the email, each skipped once done (so a
+   * retry repeats neither). `strict` (every queued attempt but the last)
+   * throws on failure so the job is retried; otherwise a failed PDF still
+   * sends the email without it and a failed email is logged, like legacy.
+   */
+  async deliver(id: bigint, strict = false) {
+    let invoice = await this.db.query.invoices.findFirst({
+      where: eq(invoicesTable.id, id),
+    });
+    if (!invoice) return;
+    if (!invoice.pdf_path) invoice = await this.generatePdf(invoice, strict);
+    if (!invoice.email_sent_at) await this.emailInvoice(invoice, strict);
+  }
+
+  /**
    * Render the PDF and store it privately at the legacy path
    * (`invoices/<id>/<number>.pdf`). If that fails the invoice keeps no file,
    * like legacy without dompdf (which kept an HTML copy instead).
    */
-  async generatePdf(invoice: invoices) {
+  async generatePdf(invoice: invoices, strict = false) {
     const user = invoice.user_id
       ? ((await this.db.query.users.findFirst({
           where: eq(usersTable.id, invoice.user_id),
@@ -107,6 +136,7 @@ export class InvoiceService {
       const pdf = await renderInvoicePdf(invoice, user);
       await this.storage.putPrivate(relPath, pdf, 'application/pdf');
     } catch (e) {
+      if (strict) throw e;
       this.logger.error(
         `Invoice PDF failed for ${invoice.number}: ${String(e)}`,
       );
@@ -116,7 +146,7 @@ export class InvoiceService {
   }
 
   /** Email the invoice PDF as an attachment to the billing_email. */
-  async emailInvoice(invoice: invoices) {
+  async emailInvoice(invoice: invoices, strict = false) {
     if (!invoice.billing_email) return;
     try {
       const pdf = invoice.pdf_path
@@ -141,8 +171,9 @@ export class InvoiceService {
       });
       await this.save(invoice, { email_sent_at: new Date() });
     } catch (e) {
+      if (strict) throw e;
       this.logger.warn(
-        `InvoiceService.emailInvoice failed: ${invoice.number}: ${String(e)}`,
+        `InvoiceService.emailInvoice failed: ${invoice.number}: ${logSafe(e)}`,
       );
     }
   }

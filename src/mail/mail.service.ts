@@ -25,12 +25,11 @@ export function sanitizeMailError(e: unknown, cfg?: MailConfig): string {
 
 /**
  * Laravel's mailers. The settings come from the super admin panel
- * (`mail_settings`, via `MailSettingsService`) and fall back to MAIL_* like
- * config/mail.php when no row exists:
+ * (`mail_settings`, via `MailSettingsService`; `log` when no row exists):
  *  - `log` (Laravel's default): the message is written to the log, nothing is sent.
  *  - `smtp`: nodemailer with the host, port, encryption (`tls` STARTTLS, `ssl`
  *    implicit TLS, or none), username and password.
- *  - `array`: kept in memory (`sent`), for tests (environment only).
+ *  - `array`: kept in memory (`sent`), for unit tests (never stored).
  * Send failures throw, as in Laravel.
  */
 @Injectable()
@@ -76,10 +75,10 @@ export class MailService {
     const problem = productionMailProblem(cfg);
     if (problem) {
       this.logger.error(
-        `Outgoing mail is not configured (${problem}): a message was not sent. Set it in the super admin panel (Mail settings).`,
+        `Outgoing mail is not configured (${problem}): a message was not sent. Set it in the super admin panel (Integrations → Email).`,
       );
       throw new MailNotConfigured(
-        'Outgoing mail is not configured. Ask a super admin to set it up under Mail settings.',
+        'Outgoing mail is not configured. Ask a super admin to set it up under Integrations.',
       );
     }
 

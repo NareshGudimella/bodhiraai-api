@@ -1,24 +1,20 @@
-import { otpLoginEnabled } from './env';
+import { otpDelivery } from './env';
 
-describe('otpLoginEnabled', () => {
-  it('is off by default in production and on elsewhere', () => {
-    expect(otpLoginEnabled({ NODE_ENV: 'production' })).toBe(false);
-    expect(otpLoginEnabled({ NODE_ENV: 'development' })).toBe(true);
-    expect(otpLoginEnabled({ NODE_ENV: 'test' })).toBe(true);
+describe('otpDelivery', () => {
+  it('sends by SMS whenever MSG91 is active', () => {
+    expect(otpDelivery(true, { NODE_ENV: 'production' })).toBe('sms');
+    expect(otpDelivery(true, { NODE_ENV: 'development' })).toBe('sms');
   });
 
-  it('follows OTP_LOGIN_ENABLED when it is set', () => {
+  it('without SMS: off in production, the dev flow elsewhere', () => {
+    expect(otpDelivery(false, { NODE_ENV: 'production' })).toBeNull();
+    expect(otpDelivery(false, { NODE_ENV: 'development' })).toBe('dev');
+    expect(otpDelivery(false, { NODE_ENV: 'test' })).toBe('dev');
+  });
+
+  it('ignores the retired OTP_LOGIN_ENABLED flag', () => {
     expect(
-      otpLoginEnabled({ NODE_ENV: 'production', OTP_LOGIN_ENABLED: '1' }),
-    ).toBe(true);
-    expect(
-      otpLoginEnabled({ NODE_ENV: 'production', OTP_LOGIN_ENABLED: 'true' }),
-    ).toBe(true);
-    expect(
-      otpLoginEnabled({ NODE_ENV: 'development', OTP_LOGIN_ENABLED: '0' }),
-    ).toBe(false);
-    expect(
-      otpLoginEnabled({ NODE_ENV: 'development', OTP_LOGIN_ENABLED: 'false' }),
-    ).toBe(false);
+      otpDelivery(false, { NODE_ENV: 'production', OTP_LOGIN_ENABLED: '1' }),
+    ).toBeNull();
   });
 });

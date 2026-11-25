@@ -1,13 +1,17 @@
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadBucketCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Injectable, Logger } from '@nestjs/common';
+import { IntegrationSettingsService } from '../integrations/integration-settings.service';
+import type { StorageConfig } from '../integrations/integrations';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
-import { fileKeyOf, FILES_PREFIX } from './file-url';
+import { fileKeyOf, FILES_PREFIX, signFileKey } from './file-url';
 import { strRandom, strSlug } from './laravel-str';
 import { faststart, isFaststart } from './mp4-faststart';
 import {
@@ -16,19 +20,35 @@ import {
   type UploadCategory,
 } from './upload-rules';
 
-/** S3 client for R2 from the R2_* variables (also used by the files:make-private script). */
-export function createR2Client(): S3Client {
+/**
+ * S3 client for R2 from the Integrations → Storage settings (also used by the
+ * files:make-private script). R2_ENDPOINT (test-only knob, env) overrides the
+ * endpoint: tests use a local stub or MinIO.
+ */
+export function createR2Client(cfg: StorageConfig): S3Client {
   return new S3Client({
     region: 'auto',
     endpoint:
       process.env.R2_ENDPOINT ||
-      `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      `https://${cfg.account_id}.r2.cloudflarestorage.com`,
     forcePathStyle: true,
     credentials: {
-      accessKeyId: process.env.R2_ACCESS_KEY_ID ?? '',
-      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY ?? '',
+      accessKeyId: cfg.access_key_id ?? '',
+      secretAccessKey: cfg.secret_access_key ?? '',
     },
   });
+}
+
+/** The public base URL that stored keys are appended to. */
+export function publicBaseOf(
+  driver: 'r2' | 'local',
+  cfg: StorageConfig | null,
+): string {
+  const base =
+    driver === 'r2'
+      ? (cfg?.public_url ?? '')
+      : `${process.env.PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? 4000}`}/uploads`;
+  return base.replace(/\/$/, '');
 }
 
 export interface StoreOptions {
@@ -40,15 +60,16 @@ export interface StoreOptions {
  * File storage for uploads (port of FileUploadService::store / storeCloud / delete).
  *
  * STORAGE_DRIVER=r2 (production): Cloudflare R2 through its S3-compatible API.
- *   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, and
- *   R2_PUBLIC_URL (the bucket's public domain, e.g. https://files.bodhira.ai).
- *   R2_ENDPOINT overrides the endpoint (tests use a local MinIO).
+ *   not in legacy (2026-11-25): account id, keys, buckets and the public URL
+ *   (the bucket's public domain, e.g. https://files.bodhira.ai) come from
+ *   Integrations → Storage, read on every use; the S3 client is rebuilt when
+ *   they change, so a save applies without a restart. R2_ENDPOINT (env, tests).
  * STORAGE_DRIVER=local (default for development): files under LOCAL_UPLOAD_DIR,
  *   served by this API at /uploads/*.
  *
  * Stored URLs are absolute, so the legacy app can render files uploaded here.
  *
- * Private files (invoices) never get a public URL: R2_PRIVATE_BUCKET in r2
+ * Private files (invoices) never get a public URL: the private bucket in r2
  * mode, LOCAL_PRIVATE_DIR (not served) locally. Read them back with getPrivate().
  *
  * security: not in legacy. Uploads for private columns (avatars, school logos,
@@ -60,19 +81,23 @@ export interface StoreOptions {
 @Injectable()
 export class StorageService {
   private readonly logger = new Logger(StorageService.name);
-  private s3: S3Client | null = null;
+  private s3: { key: string; client: S3Client } | null = null;
 
+  constructor(private readonly settings: IntegrationSettingsService) {}
+
+  /** STORAGE_DRIVER stays in the environment (deployment shape, and tests). */
   get driver(): 'r2' | 'local' {
     return process.env.STORAGE_DRIVER === 'r2' ? 'r2' : 'local';
   }
 
+  /** R2 settings in effect (null with the local driver). */
+  async r2Config(): Promise<StorageConfig | null> {
+    return this.driver === 'r2' ? this.settings.get('storage') : null;
+  }
+
   /** Public base URL that stored keys are appended to. */
-  get publicBase(): string {
-    const base =
-      this.driver === 'r2'
-        ? (process.env.R2_PUBLIC_URL ?? '')
-        : `${process.env.PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? 4000}`}/uploads`;
-    return base.replace(/\/$/, '');
+  async publicBase(): Promise<string> {
+    return publicBaseOf(this.driver, await this.r2Config());
   }
 
   static localDir() {
@@ -83,16 +108,52 @@ export class StorageService {
     return resolve(process.env.LOCAL_PRIVATE_DIR ?? 'storage/private');
   }
 
-  private privateBucket() {
-    const bucket = process.env.R2_PRIVATE_BUCKET;
+  private privateBucket(cfg: StorageConfig) {
     // Never fall back to the public bucket: keys like invoice numbers are guessable.
-    if (!bucket) throw new Error('R2_PRIVATE_BUCKET is not set');
-    return bucket;
+    if (!cfg.private_bucket)
+      throw new Error('The private R2 bucket is not configured');
+    return cfg.private_bucket;
   }
 
-  private client(): S3Client {
-    this.s3 ??= createR2Client();
-    return this.s3;
+  /** The S3 client for these settings; rebuilt when they change. */
+  private client(cfg: StorageConfig): S3Client {
+    const key = JSON.stringify([
+      cfg.account_id,
+      cfg.access_key_id,
+      cfg.secret_access_key,
+    ]);
+    if (this.s3?.key !== key) {
+      this.s3?.client.destroy();
+      this.s3 = { key, client: createR2Client(cfg) };
+    }
+    return this.s3.client;
+  }
+
+  /** R2 settings and client, for an r2-mode operation. */
+  private async r2() {
+    const cfg = await this.settings.get('storage');
+    return { cfg, s3: this.client(cfg) };
+  }
+
+  /**
+   * not in legacy: the super admin's "Test" for storage: HeadBucket on each
+   * configured bucket with the saved settings. Throws on the first failure.
+   */
+  async testBuckets(): Promise<string[]> {
+    const { cfg, s3 } = await this.r2();
+    const buckets = [cfg.bucket, cfg.private_bucket, cfg.legacy_bucket].filter(
+      (b): b is string => !!b,
+    );
+    if (!buckets.length) throw new Error('No bucket is configured.');
+    for (const Bucket of buckets) {
+      try {
+        await s3.send(new HeadBucketCommand({ Bucket }));
+      } catch (e) {
+        const name = (e as { name?: string }).name ?? 'Error';
+        throw new Error(`Bucket ${Bucket}: ${name}`, { cause: e });
+      }
+    }
+    return buckets;
   }
 
   /** `<slug>-<8 random>.<ext>` from the client file name (legacy naming). */
@@ -112,21 +173,22 @@ export class StorageService {
       return `${FILES_PREFIX}${key}`;
     }
     if (this.driver === 'r2') {
-      await this.client().send(
+      const { cfg, s3 } = await this.r2();
+      await s3.send(
         new PutObjectCommand({
-          Bucket: process.env.R2_BUCKET,
+          Bucket: cfg.bucket ?? '',
           Key: key,
           Body: file.buffer,
           ContentType: contentType,
           CacheControl: 'public, max-age=31536000, immutable',
         }),
       );
-    } else {
-      const path = join(StorageService.localDir(), key);
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, file.buffer);
+      return `${publicBaseOf('r2', cfg)}/${key}`;
     }
-    return `${this.publicBase}/${key}`;
+    const path = join(StorageService.localDir(), key);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, file.buffer);
+    return `${publicBaseOf('local', null)}/${key}`;
   }
 
   /** FileUploadService::store: validated upload under `<folder>/`. Returns the public URL. */
@@ -194,13 +256,15 @@ export class StorageService {
   async delete(url: string | null | undefined) {
     const privateKey = fileKeyOf(url);
     if (privateKey !== null) return this.deletePrivate(privateKey);
-    if (!url || !this.publicBase || !url.startsWith(`${this.publicBase}/`))
-      return;
-    const key = url.slice(this.publicBase.length + 1);
+    if (!url) return;
+    const cfg = await this.r2Config();
+    const base = publicBaseOf(this.driver, cfg);
+    if (!base || !url.startsWith(`${base}/`)) return;
+    const key = url.slice(base.length + 1);
     try {
-      if (this.driver === 'r2') {
-        await this.client().send(
-          new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET, Key: key }),
+      if (cfg) {
+        await this.client(cfg).send(
+          new DeleteObjectCommand({ Bucket: cfg.bucket ?? '', Key: key }),
         );
       } else {
         await unlink(join(StorageService.localDir(), key));
@@ -214,8 +278,12 @@ export class StorageService {
   async deletePrivate(key: string) {
     try {
       if (this.driver === 'r2') {
-        await this.client().send(
-          new DeleteObjectCommand({ Bucket: this.privateBucket(), Key: key }),
+        const { cfg, s3 } = await this.r2();
+        await s3.send(
+          new DeleteObjectCommand({
+            Bucket: this.privateBucket(cfg),
+            Key: key,
+          }),
         );
       } else {
         const path = StorageService.privatePath(key);
@@ -236,9 +304,10 @@ export class StorageService {
   /** Store bytes at `key` without a public URL (Storage::disk('public')->put for files only the API serves). */
   async putPrivate(key: string, bytes: Buffer, contentType: string) {
     if (this.driver === 'r2') {
-      await this.client().send(
+      const { cfg, s3 } = await this.r2();
+      await s3.send(
         new PutObjectCommand({
-          Bucket: this.privateBucket(),
+          Bucket: this.privateBucket(cfg),
           Key: key,
           Body: bytes,
           ContentType: contentType,
@@ -251,12 +320,30 @@ export class StorageService {
     await writeFile(path, bytes);
   }
 
+  /**
+   * not in legacy: a time-limited link to a private object for an outside
+   * service to fetch (VdoCipher's importUrl): presigned in r2 mode, else our
+   * signed `/files/` link. Never stored or shown to users.
+   */
+  async presignPrivate(key: string, ttl: number): Promise<string> {
+    if (this.driver === 'r2') {
+      const { cfg, s3 } = await this.r2();
+      return getSignedUrl(
+        s3,
+        new GetObjectCommand({ Bucket: this.privateBucket(cfg), Key: key }),
+        { expiresIn: ttl },
+      );
+    }
+    return signFileKey(key, { ttl });
+  }
+
   /** A private file's bytes, or null when it doesn't exist. */
   async getPrivate(key: string): Promise<Buffer | null> {
     try {
       if (this.driver === 'r2') {
-        const res = await this.client().send(
-          new GetObjectCommand({ Bucket: this.privateBucket(), Key: key }),
+        const { cfg, s3 } = await this.r2();
+        const res = await s3.send(
+          new GetObjectCommand({ Bucket: this.privateBucket(cfg), Key: key }),
         );
         return res.Body
           ? Buffer.from(await res.Body.transformToByteArray())

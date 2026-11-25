@@ -48,7 +48,7 @@ import {
   pricePaiseFor,
 } from './billing.constants';
 import { BillingService, daysRemaining, isInTrial } from './billing.service';
-import { assertDemoBilling, envString } from './gateways';
+import { assertDemoBilling } from './gateways';
 import { InvoiceService } from './invoice.service';
 
 type Data = Record<string, unknown>;
@@ -131,10 +131,10 @@ export class CheckoutController {
     const key = data.plan as string;
     const cycle = data.cycle as 'monthly' | 'yearly';
     const plan = INDIVIDUAL_PLANS[key];
-    const gateway = this.billing.gateway();
+    const gateway = await this.billing.gateway();
     const now = new Date();
 
-    if (this.billing.liveBilling()) {
+    if (await this.billing.liveBilling()) {
       const chosen = await this.selectPlan(user, key, cycle, now);
       return ok(
         { checkout: { subscription_id: Number(chosen.id), cycle } },
@@ -200,7 +200,7 @@ export class CheckoutController {
 
     const amount = pricePaiseFor(plan, cycle);
     const tax = phpRound((amount * TAX_RATE_BPS) / 10000);
-    const gateway = this.billing.razorpay();
+    const gateway = await this.billing.razorpay();
     const configured = gateway.isConfigured();
     if (!configured) assertDemoBilling(); // security: not in legacy
     const orderId = configured
@@ -217,7 +217,7 @@ export class CheckoutController {
       gateway: gateway.name(),
       demo_mode: !configured,
       // The public key the Razorpay checkout script needs (legacy prints it in the page).
-      key_id: configured ? envString('RAZORPAY_KEY_ID') : null,
+      key_id: configured ? gateway.keyId() : null,
       // The server-side order the payment must be for (null in demo mode).
       order_id: orderId,
     });
@@ -261,7 +261,7 @@ export class CheckoutController {
     ) as Data;
     const amount = pricePaiseFor(plan, cycle);
     const total = amount + phpRound((amount * TAX_RATE_BPS) / 10000);
-    const verified = this.verifyPayment(previous, cycle, total, data);
+    const verified = await this.verifyPayment(previous, cycle, total, data);
     // A paid order can't be used again.
     const kept = { ...previous };
     for (const k of [
@@ -332,7 +332,11 @@ export class CheckoutController {
     @Param('invoice') raw: string,
     @Res() res: Response,
   ) {
-    const invoice = await this.ownInvoice(user, raw);
+    let invoice = await this.ownInvoice(user, raw);
+    // not in legacy: a paid invoice whose `invoice` job hasn't run yet gets
+    // its PDF now (the job then skips it).
+    if (!invoice.pdf_path && invoice.status === 'paid')
+      invoice = await this.invoices.generatePdf(invoice);
     const bytes = invoice.pdf_path
       ? await this.storage.getPrivate(invoice.pdf_path)
       : null;
@@ -350,15 +354,15 @@ export class CheckoutController {
    * Throws unless this completion may activate the plan. Returns true for a
    * verified Razorpay payment, false in demo mode (no gateway keys at all).
    */
-  private verifyPayment(
+  private async verifyPayment(
     meta: Data,
     cycle: string,
     totalPaise: number,
     data: Data,
   ) {
-    const razorpay = this.billing.razorpay();
+    const razorpay = await this.billing.razorpay();
     if (!razorpay.isConfigured()) {
-      if (this.billing.liveBilling()) {
+      if (await this.billing.liveBilling()) {
         throw new ApiException(
           'Online payment is not available right now.',
           422,
@@ -410,12 +414,12 @@ export class CheckoutController {
     ) {
       return meta.pending_order_id;
     }
-    const order = await this.billing
-      .razorpay()
-      .createOrder(totalPaise, `bdh-sub-${sub.id}`, {
-        subscription_id: String(sub.id),
-        cycle,
-      });
+    const order = await (
+      await this.billing.razorpay()
+    ).createOrder(totalPaise, `bdh-sub-${sub.id}`, {
+      subscription_id: String(sub.id),
+      cycle,
+    });
     await this.db
       .update(subscriptionsTable)
       .set({

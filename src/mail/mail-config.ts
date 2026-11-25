@@ -1,7 +1,7 @@
-/** The mail configuration in effect: the `mail_settings` row, else the MAIL_* environment. */
+/** The mail configuration in effect: the `mail_settings` row, else the defaults. */
 export interface MailConfig {
-  source: 'database' | 'env';
-  /** `array` (tests) exists only for the env source. */
+  source: 'database' | 'none';
+  /** `array` (tests) is never stored. */
   mailer: string;
   host: string | null;
   port: number;
@@ -13,21 +13,22 @@ export interface MailConfig {
   fromName: string;
 }
 
-/** Laravel's config/mail.php from MAIL_* (port 465 or MAIL_SCHEME=smtps imply implicit TLS). */
-export function envMailConfig(
-  env: NodeJS.ProcessEnv = process.env,
-): MailConfig {
-  const port = Number(env.MAIL_PORT ?? 587);
+/**
+ * not in legacy (2026-11-25): with nothing saved in the admin panel, Laravel's
+ * defaults apply (the `log` mailer). The MAIL_* environment is no longer read;
+ * `npm run settings:import-env` copies it into the panel once.
+ */
+export function defaultMailConfig(): MailConfig {
   return {
-    source: 'env',
-    mailer: env.MAIL_MAILER || 'log',
-    host: env.MAIL_HOST || null,
-    port,
-    encryption: env.MAIL_SCHEME === 'smtps' || port === 465 ? 'ssl' : 'none',
-    username: env.MAIL_USERNAME || null,
-    password: env.MAIL_PASSWORD ?? null,
-    fromAddress: env.MAIL_FROM_ADDRESS ?? 'hello@example.com',
-    fromName: env.MAIL_FROM_NAME ?? 'Bodhira',
+    source: 'none',
+    mailer: 'log',
+    host: null,
+    port: 587,
+    encryption: 'none',
+    username: null,
+    password: null,
+    fromAddress: 'hello@example.com',
+    fromName: 'Bodhira',
   };
 }
 

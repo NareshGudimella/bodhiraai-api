@@ -20,6 +20,7 @@ import {
   subjects,
 } from '../src/db/schema';
 import type { site_settings as SiteSetting } from '../src/db/types';
+import { stubIntegrations } from './integrations';
 
 loadEnv();
 
@@ -29,8 +30,8 @@ const hex32 = () => randomBytes(16).toString('hex');
 
 /**
  * Gap fixes (2026-11-01), security: not in legacy.
- * - /video/otp signs only marketing videos: VDOCIPHER_VIDEO_ID, the
- *   `media.home_video_id` setting and VDOCIPHER_PUBLIC_VIDEO_IDS, never a
+ * - /video/otp signs only marketing videos: the marketing video id, the
+ *   `media.home_video_id` setting and the public video ids, never a
  *   lesson's video. VdoCipher is a local stub (VDOCIPHER_API_BASE).
  * - /health reports Redis as down (503 degraded) when REDIS_URL is unreachable.
  * Creates one school, subject, chapter and lesson, and sets
@@ -80,14 +81,7 @@ describe('Gap fixes (e2e)', () => {
     await new Promise<void>((r) => stub.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${(stub.address() as AddressInfo).port}`;
 
-    setEnv('VDOCIPHER_API_SECRET', VDO_SECRET);
     setEnv('VDOCIPHER_API_BASE', base);
-    setEnv('VDOCIPHER_VIDEO_ID', defaultId);
-    // Upper case and spaces: compared case-insensitively, trimmed.
-    setEnv(
-      'VDOCIPHER_PUBLIC_VIDEO_IDS',
-      ` ${extraId.toUpperCase()} , ${lessonId}`,
-    );
 
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
@@ -96,6 +90,12 @@ describe('Gap fixes (e2e)', () => {
       moduleRef.createNestApplication<NestExpressApplication>(),
     );
     await app.init();
+    stubIntegrations(app).set('vdocipher', {
+      api_secret: VDO_SECRET,
+      marketing_video_id: defaultId,
+      // Upper case and spaces: compared case-insensitively, trimmed.
+      public_video_ids: ` ${extraId.toUpperCase()} , ${lessonId}`,
+    });
     db = app.get<Db>(DB);
 
     const now = new Date();
@@ -205,7 +205,7 @@ describe('Gap fixes (e2e)', () => {
           playbackInfo: `pbi-${tag}`,
         });
       }
-      // No ?video= means VDOCIPHER_VIDEO_ID, as legacy.
+      // No ?video= means the marketing video id, as legacy.
       await http().get('/api/v1/video/otp').expect(200);
       expect(otpCalls).toEqual([defaultId, homeId, extraId, defaultId]);
     });

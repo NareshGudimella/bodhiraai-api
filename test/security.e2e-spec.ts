@@ -1,6 +1,8 @@
 process.env.TZ = 'UTC';
 
 import { createHmac, randomBytes } from 'node:crypto';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { Test } from '@nestjs/testing';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -25,6 +27,7 @@ import {
   users,
 } from '../src/db/schema';
 import type { users as User } from '../src/db/types';
+import { stubIntegrations } from './integrations';
 
 loadEnv();
 
@@ -47,6 +50,7 @@ describe('Security hardening (e2e)', () => {
   let schoolId: bigint;
   const created: bigint[] = [];
   const envBefore: Record<string, string | undefined> = {};
+  let settings: ReturnType<typeof stubIntegrations>;
   const http = () => request(app.getHttpServer());
   const bearer = (t: string) => ({ Authorization: `Bearer ${t}` });
 
@@ -99,6 +103,7 @@ describe('Security hardening (e2e)', () => {
       moduleRef.createNestApplication<NestExpressApplication>(),
     );
     await app.init();
+    settings = stubIntegrations(app);
     db = app.get<Db>(DB);
     tokens = app.get(TokenService);
     auth = app.get(AuthService);
@@ -273,8 +278,9 @@ describe('Security hardening (e2e)', () => {
     const reload = (u: User) =>
       db.query.users.findFirst({ where: eq(users.id, u.id) });
 
-    it('answers 503 while OTP_LOGIN_ENABLED is off (and by default in production)', async () => {
-      setEnv('OTP_LOGIN_ENABLED', '0');
+    it('answers 503 in production unless MSG91 is configured and enabled', async () => {
+      setEnv('NODE_ENV', 'production');
+      setEnv('OTP_LOGIN_ENABLED', '1'); // retired: no longer turns it on
       const send = await http()
         .post('/api/v1/auth/otp/send')
         .send({ phone: phone() })
@@ -284,14 +290,76 @@ describe('Security hardening (e2e)', () => {
         .post('/api/v1/auth/otp/verify')
         .send({ phone: phone(), otp: '123456' })
         .expect(503);
-
-      setEnv('OTP_LOGIN_ENABLED', undefined);
-      setEnv('NODE_ENV', 'production');
+      // Complete but switched off: still unavailable.
+      settings.set('sms', {
+        enabled: false,
+        auth_key: 'k',
+        template_id: 't1',
+      });
       await http()
         .post('/api/v1/auth/otp/send')
         .send({ phone: phone() })
         .expect(503);
+      settings.reset('sms');
+      setEnv('OTP_LOGIN_ENABLED', undefined);
       setEnv('NODE_ENV', 'test');
+    });
+
+    it('in production with MSG91 sends the code by SMS (stubbed), never in the response', async () => {
+      const calls: { url: string; authkey: string }[] = [];
+      const stub = createServer((req, res) => {
+        calls.push({
+          url: req.url ?? '',
+          authkey: String(req.headers.authkey ?? ''),
+        });
+        req.resume();
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ type: 'success', request_id: 'r1' }));
+      });
+      await new Promise<void>((r) => stub.listen(0, '127.0.0.1', r));
+      const port = (stub.address() as AddressInfo).port;
+      setEnv('MSG91_API_BASE', `http://127.0.0.1:${port}/api/v5`);
+      setEnv('NODE_ENV', 'production');
+      settings.set('sms', {
+        enabled: true,
+        auth_key: 'msg91-auth',
+        sender_id: 'BODHRA',
+        template_id: 'tmpl42',
+      });
+      try {
+        const u = await mkUser('student', { phone: phone() });
+        const res = await http()
+          .post('/api/v1/auth/otp/send')
+          .send({ phone: u.phone })
+          .expect(200);
+        expect(res.body.data.otp).toBeUndefined();
+        for (let i = 0; i < 50 && !calls.length; i++)
+          await new Promise((r) => setTimeout(r, 20));
+        expect(calls).toHaveLength(1);
+        const q = new URL(calls[0].url, 'http://x').searchParams;
+        expect(calls[0].url.startsWith('/api/v5/otp?')).toBe(true);
+        expect(calls[0].authkey).toBe('msg91-auth');
+        expect(q.get('template_id')).toBe('tmpl42');
+        expect(q.get('sender')).toBe('BODHRA');
+        expect(q.get('mobile')).toBe(u.phone!.replace(/\D/g, ''));
+        // The SMS'd code signs in.
+        const verified = await http()
+          .post('/api/v1/auth/otp/verify')
+          .send({ phone: u.phone, otp: q.get('otp') })
+          .expect(200);
+        expect(verified.body.data.token).toBeTruthy();
+        // An unknown phone gets the same answer and no SMS.
+        await http()
+          .post('/api/v1/auth/otp/send')
+          .send({ phone: phone() })
+          .expect(200);
+        await new Promise((r) => setTimeout(r, 100));
+        expect(calls).toHaveLength(1);
+      } finally {
+        settings.reset('sms');
+        setEnv('NODE_ENV', 'test');
+        stub.close();
+      }
     });
 
     it('does not create a Guest row for an unknown phone, and answers like a known one', async () => {
@@ -545,12 +613,7 @@ describe('Security hardening (e2e)', () => {
     it('refuses demo checkout in production unless BILLING_DEMO=1', async () => {
       const u = await mkUser('student');
       const t = await tokenFor(u);
-      for (const k of [
-        'RAZORPAY_KEY_ID',
-        'RAZORPAY_KEY_SECRET',
-        'STRIPE_SECRET',
-      ])
-        setEnv(k, undefined);
+      settings.reset('payments'); // no gateway configured
       setEnv('NODE_ENV', 'production');
       setEnv('BILLING_DEMO', undefined);
       const plan = { plan: 'individual_basic', cycle: 'monthly' };
@@ -577,7 +640,7 @@ describe('Security hardening (e2e)', () => {
     });
 
     it('applies a captured payment once, however often the webhook is re-sent', async () => {
-      setEnv('RAZORPAY_WEBHOOK_SECRET', 'sec-hook-secret');
+      settings.set('payments', { razorpay_webhook_secret: 'sec-hook-secret' });
       const now = new Date();
       const [pay] = await db
         .insert(payments)
@@ -649,7 +712,7 @@ describe('Security hardening (e2e)', () => {
     });
 
     it('does not reveal configuration problems to the sender', async () => {
-      setEnv('RAZORPAY_WEBHOOK_SECRET', undefined);
+      settings.reset('payments');
       const res = await http()
         .post('/webhooks/razorpay')
         .set('Content-Type', 'application/json')
@@ -657,7 +720,7 @@ describe('Security hardening (e2e)', () => {
         .send('{"event":"x"}')
         .expect(400);
       expect(res.body).toEqual({ ok: false, error: 'Webhook rejected.' });
-      setEnv('RAZORPAY_WEBHOOK_SECRET', 'sec-hook-secret');
+      settings.set('payments', { razorpay_webhook_secret: 'sec-hook-secret' });
       const bad = await http()
         .post('/webhooks/razorpay')
         .set('Content-Type', 'application/json')
@@ -746,7 +809,7 @@ describe('Security hardening (e2e)', () => {
 });
 
 const claudeMock = {
-  configured: true,
+  live: () => Promise.resolve({ apiKey: 'k', model: 'm', maxTokens: 1024 }),
   reply: async () => {
     await new Promise((r) => setTimeout(r, 300));
     return {

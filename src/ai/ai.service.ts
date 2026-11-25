@@ -29,7 +29,8 @@ import {
 } from '../db/schema';
 import type { ai_chat_sessions, users } from '../db/types';
 import { approxTokens, stubResponse, SYSTEM_PROMPT } from './ai-tutor';
-import { ClaudeClient, maxReplyTokens } from './claude.client';
+import { ClaudeClient } from './claude.client';
+import { IntegrationSettingsService } from '../integrations/integration-settings.service';
 
 const NEW_TITLE = 'New conversation';
 
@@ -77,6 +78,7 @@ export class AiService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly claude: ClaudeClient,
+    private readonly integrations: IntegrationSettingsService,
   ) {}
 
   sessions(user: users) {
@@ -151,7 +153,7 @@ export class AiService {
     return r.tokens ?? 0;
   }
 
-  /** The school's override, else AI_DAILY_TOKEN_LIMIT (default 5000). A 0 override falls through. */
+  /** The school's override, else the platform limit (Integrations → AI tutor, default 5000). A 0 override falls through. */
   async dailyTokenLimit(user: users) {
     // Bodhira Direct members get the platform default, like legacy B2C.
     const schoolId = await schoolOf(this.db, user);
@@ -163,7 +165,7 @@ export class AiService {
       : null;
     return (
       school?.ai_daily_token_limit ||
-      Number(process.env.AI_DAILY_TOKEN_LIMIT) ||
+      (await this.integrations.get('ai')).daily_token_limit ||
       5000
     );
   }
@@ -204,11 +206,11 @@ export class AiService {
     // the check. A live call reserves its worst case (input estimate + max
     // reply); the real usage replaces it below. Without a key the canned reply
     // is metered as before.
-    const live = this.claude.configured;
+    const live = await this.claude.live();
     const reserve = live
       ? approxTokens(
           SYSTEM_PROMPT + body + history.map((m) => m.content).join(''),
-        ) + maxReplyTokens()
+        ) + live.maxTokens
       : approxTokens(body);
     const limit = await this.dailyTokenLimit(owner);
     const now = nowSeconds();
@@ -259,6 +261,7 @@ export class AiService {
           { role: 'user', content: body },
         ],
         { sessionId: session.id },
+        live,
       );
     } catch (e) {
       await this.settleUser(user.id, approxTokens(body));

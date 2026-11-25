@@ -5,6 +5,7 @@ import { ValidationFailed } from '../common/http/api.exception';
 import { laravelValidate } from '../common/http/laravel-validator';
 import { DB, type Db } from '../db/db';
 import { password_reset_tokens, users } from '../db/schema';
+import { JobsService } from '../jobs/jobs.service';
 import { MailService } from '../mail/mail.service';
 import { strRandom } from '../storage/laravel-str';
 import { hashPassword, verifyPassword } from './password';
@@ -39,7 +40,12 @@ export class PasswordResetService {
     @Inject(DB) private readonly db: Db,
     private readonly mail: MailService,
     private readonly tokens: TokenService,
-  ) {}
+    private readonly jobs: JobsService,
+  ) {
+    jobs.handle('password-reset', (d: { user: string }) =>
+      this.sendEmail(BigInt(d.user)),
+    );
+  }
 
   private user(email: string) {
     return this.db.query.users.findFirst({
@@ -59,22 +65,42 @@ export class PasswordResetService {
       email: ['required', 'email'],
     })) as { email: string };
     const user = await this.user(email);
-    if (!user) {
-      await hashPassword(randomBytes(32).toString('hex'));
-      return PASSWORDS.neutral;
-    }
-
+    // Looked up for unknown addresses too, so every answer does the same work.
     const existing = await this.db.query.password_reset_tokens.findFirst({
       where: eq(password_reset_tokens.email, email),
     });
-    if (
-      existing?.created_at &&
-      existing.created_at.getTime() + THROTTLE_S * 1000 > Date.now()
-    ) {
-      await hashPassword(randomBytes(32).toString('hex'));
-      return PASSWORDS.neutral;
+    const throttled =
+      !!existing?.created_at &&
+      existing.created_at.getTime() + THROTTLE_S * 1000 > Date.now();
+    // The token's own hash is made with the email, in the background.
+    await hashPassword(randomBytes(32).toString('hex'));
+    if (user && !throttled) {
+      // not in legacy: a `password-reset` job (the worker with REDIS_URL, else
+      // in the background here). It carries only the user id, never the token,
+      // and one job per user per minute (a quick second request adds none).
+      await this.jobs.run(
+        'password-reset',
+        { user: String(user.id) },
+        {
+          jobId: `password-reset-${user.id}-${Math.floor(Date.now() / 60_000)}`,
+          inline: 'background',
+        },
+      );
     }
+    return PASSWORDS.neutral;
+  }
 
+  /**
+   * Creates the token and sends ResetPasswordNotification (legacy sent it
+   * synchronously). A retry issues a new token, replacing the old one.
+   */
+  private async sendEmail(userId: bigint) {
+    const user = await this.db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { name: true, email: true },
+    });
+    if (!user?.email) return;
+    const email = user.email;
     // hash_hmac('sha256', Str::random(40), $key): 64 hex characters, sent in the link.
     const token = randomBytes(32).toString('hex');
     await this.db
@@ -91,30 +117,21 @@ export class PasswordResetService {
       '',
     );
     const url = `${web}/reset-password/${token}?email=${encodeURIComponent(email)}`;
-    // ResetPasswordNotification, sent in the background (legacy sent it synchronously)
-    // so the response time doesn't depend on the mail server.
-    void this.mail
-      .send({
-        to: { address: email, name: user.name },
-        subject: 'Reset your Bodhira password',
-        text: [
-          `Hi ${user.name},`,
-          '',
-          'You requested a password reset for your Bodhira account. Click the button below to set a new password.',
-          '',
-          `Reset Password: ${url}`,
-          '',
-          'This link expires in 60 minutes.',
-          '',
-          "If you didn't request this, you can safely ignore this email.",
-        ].join('\n'),
-      })
-      .catch((e: unknown) =>
-        this.logger.error(
-          `Password reset email failed: ${e instanceof Error ? e.message : String(e)}`,
-        ),
-      );
-    return PASSWORDS.neutral;
+    await this.mail.send({
+      to: { address: email, name: user.name },
+      subject: 'Reset your Bodhira password',
+      text: [
+        `Hi ${user.name},`,
+        '',
+        'You requested a password reset for your Bodhira account. Click the button below to set a new password.',
+        '',
+        `Reset Password: ${url}`,
+        '',
+        'This link expires in 60 minutes.',
+        '',
+        "If you didn't request this, you can safely ignore this email.",
+      ].join('\n'),
+    });
   }
 
   /** Password::reset(): checks the token, sets the password, rotates remember_token, deletes the token. */

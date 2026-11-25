@@ -96,6 +96,7 @@ export class AdminContentService {
                 thumbnail: true,
                 content_url: true,
                 video_id: true,
+                video_status: true,
               },
             },
           },

@@ -87,7 +87,7 @@ export class SchoolBillingController {
           ),
         ])
       : [[], 0];
-    const gateway = this.billing.gateway();
+    const gateway = await this.billing.gateway();
     return ok({
       school: school ? toModel('schools', school) : null,
       payments: payments.map((p) => toModel('payments', p)),
@@ -132,7 +132,7 @@ export class SchoolBillingController {
       return ok({ plan: 'free' }, 'Switched to Free plan.');
     }
 
-    const gateway = this.billing.gateway(
+    const gateway = await this.billing.gateway(
       (data.gateway as string | null) ?? null,
     );
     try {

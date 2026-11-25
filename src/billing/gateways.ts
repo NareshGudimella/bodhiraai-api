@@ -15,6 +15,7 @@ import {
   schools as schoolsTable,
 } from '../db/schema';
 import type { payments, schools } from '../db/types';
+import type { PaymentsConfig } from '../integrations/integrations';
 import { strRandom } from '../storage/laravel-str';
 
 type Event = Record<string, unknown>;
@@ -34,7 +35,8 @@ export function envString(name: string): string {
 
 /**
  * security: not in legacy. Demo billing (plans activate with no payment when
- * no gateway keys are set) is off in production unless BILLING_DEMO=1.
+ * no gateway is configured under Integrations → Payments) is off in production
+ * unless BILLING_DEMO=1 (a deliberate env-only safety switch).
  */
 export const demoBillingAllowed = () =>
   process.env.NODE_ENV !== 'production' || process.env.BILLING_DEMO === '1';
@@ -118,7 +120,15 @@ const daysFromToday = (days: number) => {
 abstract class Gateway {
   protected readonly logger = new Logger('Billing');
 
-  constructor(protected readonly db: Db) {}
+  /**
+   * not in legacy (2026-11-25): keys come from Integrations → Payments (read
+   * once per request by BillingService), not the environment. Gateway `none`
+   * leaves both gateways unconfigured (demo mode); webhook secrets still verify.
+   */
+  constructor(
+    protected readonly db: Db,
+    protected readonly cfg: PaymentsConfig,
+  ) {}
 
   abstract name(): string;
   abstract isConfigured(): boolean;
@@ -250,9 +260,15 @@ export class RazorpayGateway extends Gateway {
 
   isConfigured() {
     return (
-      envString('RAZORPAY_KEY_ID') !== '' &&
-      envString('RAZORPAY_KEY_SECRET') !== ''
+      this.cfg.gateway !== 'none' &&
+      !!this.cfg.razorpay_key_id &&
+      !!this.cfg.razorpay_key_secret
     );
+  }
+
+  /** The public key id the checkout script needs. */
+  keyId() {
+    return this.cfg.razorpay_key_id ?? '';
   }
 
   async createCheckout(
@@ -283,7 +299,7 @@ export class RazorpayGateway extends Gateway {
       };
     }
 
-    const keyId = envString('RAZORPAY_KEY_ID');
+    const keyId = this.keyId();
     const order = await this.createOrder(
       amountPaise,
       `bdh-${payment.id}`,
@@ -313,7 +329,7 @@ export class RazorpayGateway extends Gateway {
     currency = 'INR',
   ) {
     const auth = Buffer.from(
-      `${envString('RAZORPAY_KEY_ID')}:${envString('RAZORPAY_KEY_SECRET')}`,
+      `${this.keyId()}:${this.cfg.razorpay_key_secret ?? ''}`,
     ).toString('base64');
     const resp = await fetch('https://api.razorpay.com/v1/orders', {
       method: 'POST',
@@ -340,7 +356,7 @@ export class RazorpayGateway extends Gateway {
     paymentId: string,
     signature: string,
   ) {
-    const secret = envString('RAZORPAY_KEY_SECRET');
+    const secret = this.cfg.razorpay_key_secret ?? '';
     return (
       secret !== '' &&
       hashEquals(hmac(`${orderId}|${paymentId}`, secret), signature)
@@ -348,9 +364,9 @@ export class RazorpayGateway extends Gateway {
   }
 
   verifyWebhook(payload: string, signature: string): Event {
-    const secret = envString('RAZORPAY_WEBHOOK_SECRET');
+    const secret = this.cfg.razorpay_webhook_secret ?? '';
     if (secret === '') {
-      throw new Error('RAZORPAY_WEBHOOK_SECRET not set');
+      throw new Error('Razorpay webhook secret not set');
     }
     if (!hashEquals(hmac(payload, secret), signature)) {
       throw new Error('Invalid Razorpay signature');
@@ -412,7 +428,7 @@ export class StripeGateway extends Gateway {
   }
 
   isConfigured() {
-    return envString('STRIPE_SECRET') !== '';
+    return this.cfg.gateway !== 'none' && !!this.cfg.stripe_secret;
   }
 
   async createCheckout(
@@ -462,7 +478,7 @@ export class StripeGateway extends Gateway {
     const resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${envString('STRIPE_SECRET')}`,
+        Authorization: `Bearer ${this.cfg.stripe_secret ?? ''}`,
         'Content-Type': 'application/x-www-form-urlencoded',
         Accept: 'application/json',
       },
@@ -485,9 +501,9 @@ export class StripeGateway extends Gateway {
   }
 
   verifyWebhook(payload: string, signature: string): Event {
-    const secret = envString('STRIPE_WEBHOOK_SECRET');
+    const secret = this.cfg.stripe_webhook_secret ?? '';
     if (secret === '') {
-      throw new Error('STRIPE_WEBHOOK_SECRET not set');
+      throw new Error('Stripe webhook secret not set');
     }
     // Stripe signature format: t=...,v1=...
     const parts: Record<string, string> = {};
@@ -535,3 +551,34 @@ function phpIntval(s: string) {
 }
 
 export type BillingGateway = RazorpayGateway | StripeGateway;
+
+/**
+ * not in legacy: the super admin's "Test" for payments: a read-only,
+ * authenticated call per gateway with keys (Razorpay: list one payment;
+ * Stripe: the balance). Throws on the first failure. Returns what was checked.
+ */
+export async function testGatewayKeys(cfg: PaymentsConfig): Promise<string[]> {
+  const checked: string[] = [];
+  const get = async (name: string, url: string, auth: string) => {
+    const res = await fetch(url, {
+      headers: { Authorization: auth, Accept: 'application/json' },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
+    checked.push(name);
+  };
+  if (cfg.razorpay_key_id && cfg.razorpay_key_secret)
+    await get(
+      'Razorpay',
+      'https://api.razorpay.com/v1/payments?count=1',
+      `Basic ${Buffer.from(`${cfg.razorpay_key_id}:${cfg.razorpay_key_secret}`).toString('base64')}`,
+    );
+  if (cfg.stripe_secret)
+    await get(
+      'Stripe',
+      'https://api.stripe.com/v1/balance',
+      `Bearer ${cfg.stripe_secret}`,
+    );
+  if (!checked.length) throw new Error('No gateway keys are saved.');
+  return checked;
+}

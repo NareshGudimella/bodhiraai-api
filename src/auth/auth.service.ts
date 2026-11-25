@@ -1,8 +1,10 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { seatsUsed } from '../common/seats';
 import { randomInt } from 'node:crypto';
 import { and, asc, eq, sql } from 'drizzle-orm';
-import { isDevelopment, otpLoginEnabled } from '../config/env';
+import { isDevelopment, otpDelivery } from '../config/env';
+import { Msg91Client } from '../integrations/msg91.client';
+import type { SmsConfig } from '../integrations/integrations';
 import { ApiException, ValidationFailed } from '../common/http/api.exception';
 import { phpJsonEncode } from '../common/http/laravel';
 import { laravelValidate } from '../common/http/laravel-validator';
@@ -76,7 +78,10 @@ export class AuthService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly tokens: TokenService,
+    private readonly sms: Msg91Client,
   ) {}
+
+  private readonly logger = new Logger('Auth');
 
   /** The user with its school (`findUniqueOrThrow`: a missing row is a 500). */
   private async withSchool(id: bigint) {
@@ -337,15 +342,21 @@ export class AuthService {
     return this.session(user, device);
   }
 
-  /** security: not in legacy: 503 while the OTP feature is off (no SMS provider; see OTP_LOGIN_ENABLED). */
-  assertOtpEnabled() {
-    if (!otpLoginEnabled()) {
+  /**
+   * security: not in legacy: 503 while the OTP feature is off (production
+   * without MSG91 configured and enabled, see otpDelivery()). Returns the SMS
+   * settings when codes go out by SMS, else null (the development flow).
+   */
+  async assertOtpEnabled(): Promise<SmsConfig | null> {
+    const sms = await this.sms.active();
+    if (!otpDelivery(!!sms)) {
       throw new ApiException(
         'Phone OTP sign-in is not available. Sign in with your email or username and password.',
         503,
         'otp_unavailable',
       );
     }
+    return sms;
   }
 
   /**
@@ -356,7 +367,7 @@ export class AuthService {
    * inactive ones never get a code.
    */
   async sendOtp(dto: SendOtpDto) {
-    this.assertOtpEnabled();
+    const sms = await this.assertOtpEnabled();
     const otp = String(randomInt(100000, 1000000));
     // Hashed for every request, so timing doesn't tell known phones from unknown.
     const otpHash = await hashPassword(otp);
@@ -392,12 +403,22 @@ export class AuthService {
         });
     });
     payload.phone = existing.phone;
-    if (isDevelopment()) payload.otp = otp;
+    if (sms) {
+      // not in legacy: the code goes out by SMS (MSG91), not awaited: neither
+      // the timing nor a failure (logged) tells known phones from unknown.
+      void this.sms
+        .sendOtp(sms, existing.phone ?? dto.phone, otp)
+        .catch((e: unknown) =>
+          this.logger.error(
+            `OTP SMS failed for user ${existing.id}: ${e instanceof Error ? e.message : String(e)}`,
+          ),
+        );
+    } else if (isDevelopment()) payload.otp = otp;
     return payload;
   }
 
   async verifyOtp(dto: VerifyOtpDto) {
-    this.assertOtpEnabled();
+    await this.assertOtpEnabled();
     const user = await this.db.query.users.findFirst({
       where: eq(usersTable.phone, dto.phone),
       orderBy: [asc(usersTable.id)],

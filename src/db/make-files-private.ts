@@ -18,13 +18,17 @@
  * no-op.) Rollback doesn't need them: the legacy app serves files from its own
  * server's disk, never from R2 (docs/cutover-runbook.md §2 and §7).
  *
+ * R2 buckets, keys and the public URL come from Integrations → Storage, and
+ * the VdoCipher secret from Integrations → VdoCipher (2026-11-25; run
+ * `npm run settings:import-env` first if they are still in the environment).
+ *
  * Sources a value can point at:
- *   <R2_PUBLIC_URL or /uploads base>/<key>  this API's public uploads (R2_BUCKET / LOCAL_UPLOAD_DIR)
+ *   <public URL or /uploads base>/<key>     this API's public uploads (uploads bucket / LOCAL_UPLOAD_DIR)
  *   /media/<path>, <LEGACY_FILES_ORIGIN>/media/<path>
- *                                           legacy uploads, copied to R2_LEGACY_BUCKET under
+ *                                           legacy uploads, copied to the legacy bucket under
  *                                           media/<path> (runbook §3); the private key is <path>
  *   /cloud/<path>, <LEGACY_FILES_ORIGIN>/cloud/<path>
- *                                           legacy cloud images, R2_LEGACY_BUCKET cloud/<path>
+ *                                           legacy cloud images, legacy bucket cloud/<path>
  * Locally (STORAGE_DRIVER=local) legacy files are read from LEGACY_FILES_DIR
  * (a copy laid out like the legacy bucket). Anything else (external links) is
  * left alone. Invoices are never moved here.
@@ -34,7 +38,7 @@
  * shared by several rows is deleted after the first one is rewritten; the
  * others find the verified private copy and are just rewritten (also on a
  * re-run after a failure). A source is never deleted when the copy fails
- * verification. Without VDOCIPHER_API_SECRET, lesson videos are moved to the
+ * verification. Without a VdoCipher secret, lesson videos are moved to the
  * private bucket like other files.
  *
  * In production (NODE_ENV=production) --apply also needs --confirm-production.
@@ -56,7 +60,13 @@ import { and, eq, isNotNull, isNull } from 'drizzle-orm';
 import { copyFile, mkdir, stat, unlink } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 import { FILES_PREFIX, isForbiddenKey, signFileKey } from '../storage/file-url';
-import { createR2Client, StorageService } from '../storage/storage.service';
+import { IntegrationSettingsService } from '../integrations/integration-settings.service';
+import type { StorageConfig } from '../integrations/integrations';
+import {
+  createR2Client,
+  publicBaseOf,
+  StorageService,
+} from '../storage/storage.service';
 import { VdoCipherClient } from '../video/vdocipher.client';
 import { createDb, type Db } from './db';
 import * as schema from './schema';
@@ -95,12 +105,14 @@ const args = new Set(process.argv.slice(2));
 const APPLY = args.has('--apply');
 const r2 = process.env.STORAGE_DRIVER === 'r2';
 let s3: S3Client | null = null;
-const client = () => (s3 ??= createR2Client());
+/** Integrations → Storage, loaded once by main() (not in legacy, 2026-11-25). */
+let storage: StorageConfig | null = null;
+const client = () => (s3 ??= createR2Client(storage!));
 
 const log = (...parts: unknown[]) => console.log(...parts);
 
 function publicBase(): string {
-  return new StorageService().publicBase;
+  return publicBaseOf(r2 ? 'r2' : 'local', storage);
 }
 
 /** Private-bucket key for a stored value, with where to copy it from; null when it isn't ours. */
@@ -110,7 +122,7 @@ export function sourceOf(value: string, env = process.env): Source | null {
   if (base && value.startsWith(`${base}/`)) {
     const key = decodeURIComponent(value.slice(base.length + 1).split('?')[0]);
     return {
-      store: r2 ? (env.R2_BUCKET ?? '') : StorageService.localDir(),
+      store: r2 ? (storage?.bucket ?? '') : StorageService.localDir(),
       key,
       dest: key,
     };
@@ -123,7 +135,7 @@ export function sourceOf(value: string, env = process.env): Source | null {
   if (!m) return null;
   const rest = decodeURIComponent(m[2]);
   const legacyStore = r2
-    ? (env.R2_LEGACY_BUCKET ?? 'bodhira-legacy')
+    ? storage?.legacy_bucket || 'bodhira-legacy'
     : env.LEGACY_FILES_DIR
       ? resolve(env.LEGACY_FILES_DIR)
       : '';
@@ -180,8 +192,8 @@ async function verifiedCopy(src: Source): Promise<boolean> {
 
 function privateStore(): string {
   if (!r2) return StorageService.privateDir();
-  const bucket = process.env.R2_PRIVATE_BUCKET;
-  if (!bucket) throw new Error('R2_PRIVATE_BUCKET is not set');
+  const bucket = storage?.private_bucket;
+  if (!bucket) throw new Error('The private R2 bucket is not configured');
   return bucket;
 }
 
@@ -346,8 +358,10 @@ async function main() {
     );
   }
   const db = createDb();
-  const vdo = new VdoCipherClient();
-  const useVdo = vdo.configured();
+  const settings = new IntegrationSettingsService(db);
+  storage = await settings.get('storage');
+  const vdo = new VdoCipherClient(settings);
+  const useVdo = await vdo.configured();
   log(
     `files:make-private (${APPLY ? 'APPLY' : 'dry run'}; storage ${r2 ? 'r2' : 'local'}; videos → ${useVdo ? 'VdoCipher' : 'private storage'})`,
   );

@@ -9,7 +9,6 @@ import { configureApp } from '../src/app.setup';
 import { loadEnv } from '../src/config/env';
 import { DB, type Db } from '../src/db/db';
 import { audit_logs, mail_settings } from '../src/db/schema';
-import { MailSettingsService } from '../src/mail/mail-settings.service';
 
 loadEnv();
 
@@ -17,7 +16,6 @@ loadEnv();
 describe('Super admin mail settings (e2e)', () => {
   let app: NestExpressApplication;
   let db: Db;
-  let svc: MailSettingsService;
   let sup: { Authorization: string };
   let student: { Authorization: string };
   const http = () => request(app.getHttpServer());
@@ -25,7 +23,6 @@ describe('Super admin mail settings (e2e)', () => {
 
   const clear = async () => {
     await db.delete(mail_settings);
-    svc.invalidate();
   };
   const valid = {
     mailer: 'smtp',
@@ -55,7 +52,6 @@ describe('Super admin mail settings (e2e)', () => {
     );
     await app.init();
     db = app.get<Db>(DB);
-    svc = app.get(MailSettingsService);
     sup = await login('super@bodhira.test');
     student = await login('student@bodhira.test');
     await clear();
@@ -83,7 +79,7 @@ describe('Super admin mail settings (e2e)', () => {
     expect(res.body.data).toHaveProperty('password_set');
     expect(res.body.data).not.toHaveProperty('password');
     expect(res.body.data).not.toHaveProperty('password_enc');
-    expect(res.body.data.source).toBe('env');
+    expect(res.body.data.source).toBe('none'); // MAIL_* is not read
   });
 
   it('PUT validates with Laravel 422 keys', async () => {
@@ -175,6 +171,19 @@ describe('Super admin mail settings (e2e)', () => {
     const [changed] = await db.select().from(mail_settings);
     expect(changed.password_enc).not.toBe(before.password_enc);
     expect((await db.select().from(mail_settings)).length).toBe(1);
+  });
+
+  it('DELETE /password clears the stored password and audits', async () => {
+    await http().delete(`${URL}/password`).set(student).expect(403);
+    const res = await http().delete(`${URL}/password`).set(sup).expect(200);
+    expect(res.body.data.password_set).toBe(false);
+    const [row] = await db.select().from(mail_settings);
+    expect(row.password_enc).toBeNull();
+    const logs = await db
+      .select()
+      .from(audit_logs)
+      .where(eq(audit_logs.action, 'mail_settings.password_cleared'));
+    expect(logs.length).toBeGreaterThan(0);
   });
 
   it('test-send works with the log mailer and validates the address', async () => {

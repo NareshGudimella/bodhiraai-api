@@ -1,4 +1,4 @@
-import { productionMailProblem, envMailConfig } from './mail-config';
+import { defaultMailConfig, productionMailProblem } from './mail-config';
 import { decryptSecret, encryptSecret, mailKey } from './mail-crypto';
 import { MailService, sanitizeMailError } from './mail.service';
 import type { MailSettingsService } from './mail-settings.service';
@@ -34,58 +34,42 @@ describe('mail-crypto', () => {
   });
 });
 
-describe('envMailConfig (fallback when no row exists)', () => {
-  it('reads the MAIL_* variables like config/mail.php', () => {
-    expect(
-      envMailConfig({
-        MAIL_MAILER: 'smtp',
-        MAIL_HOST: 'smtp.example.com',
-        MAIL_PORT: '465',
-        MAIL_USERNAME: 'u',
-        MAIL_PASSWORD: 'p',
-        MAIL_FROM_ADDRESS: 'a@example.com',
-      }),
-    ).toMatchObject({
-      source: 'env',
-      mailer: 'smtp',
-      host: 'smtp.example.com',
-      port: 465,
-      encryption: 'ssl',
-      username: 'u',
-      password: 'p',
-      fromAddress: 'a@example.com',
-      fromName: 'Bodhira',
-    });
-    expect(envMailConfig({})).toMatchObject({
-      mailer: 'log',
-      port: 587,
-      encryption: 'none',
-    });
-    expect(envMailConfig({ MAIL_SCHEME: 'smtps' }).encryption).toBe('ssl');
+describe('defaultMailConfig (nothing saved)', () => {
+  it('is the log mailer; the MAIL_* environment is not read', () => {
+    const old = process.env.MAIL_MAILER;
+    process.env.MAIL_MAILER = 'smtp';
+    try {
+      expect(defaultMailConfig()).toMatchObject({
+        source: 'none',
+        mailer: 'log',
+        host: null,
+        port: 587,
+        encryption: 'none',
+      });
+    } finally {
+      if (old === undefined) delete process.env.MAIL_MAILER;
+      else process.env.MAIL_MAILER = old;
+    }
   });
 });
 
 describe('productionMailProblem', () => {
   const prod = { NODE_ENV: 'production' };
   it('only a complete smtp config is usable in production', () => {
-    for (const MAIL_MAILER of ['log', 'array', undefined]) {
-      expect(
-        productionMailProblem(envMailConfig({ MAIL_MAILER }), prod),
-      ).toMatch(/needs "smtp"/);
+    const cfg = (mailer: string, host: string | null = null) => ({
+      ...defaultMailConfig(),
+      mailer,
+      host,
+    });
+    for (const mailer of ['log', 'array']) {
+      expect(productionMailProblem(cfg(mailer), prod)).toMatch(/needs "smtp"/);
     }
-    expect(
-      productionMailProblem(envMailConfig({ MAIL_MAILER: 'smtp' }), prod),
-    ).toMatch(/no SMTP host/);
-    expect(
-      productionMailProblem(
-        envMailConfig({ MAIL_MAILER: 'smtp', MAIL_HOST: 'h' }),
-        prod,
-      ),
-    ).toBeNull();
+    expect(productionMailProblem(cfg('smtp'), prod)).toMatch(/no SMTP host/);
+    expect(productionMailProblem(cfg('smtp', 'h'), prod)).toBeNull();
   });
   it('allows anything outside production', () => {
     expect(
-      productionMailProblem(envMailConfig({}), { NODE_ENV: 'test' }),
+      productionMailProblem(defaultMailConfig(), { NODE_ENV: 'test' }),
     ).toBeNull();
   });
 });
@@ -93,7 +77,8 @@ describe('productionMailProblem', () => {
 describe('MailService', () => {
   const settings = (mailer: string, host: string | null = null) =>
     ({
-      effective: () => Promise.resolve({ ...envMailConfig({}), mailer, host }),
+      effective: () =>
+        Promise.resolve({ ...defaultMailConfig(), mailer, host }),
     }) as unknown as MailSettingsService;
   const msg = {
     to: { address: 'a@example.com' },
@@ -142,7 +127,7 @@ describe('MailService', () => {
 describe('sanitizeMailError', () => {
   it('removes credentials and bounds the length', () => {
     const cfg = {
-      ...envMailConfig({}),
+      ...defaultMailConfig(),
       username: 'mailuser',
       password: 'hunter2hunter2',
     };

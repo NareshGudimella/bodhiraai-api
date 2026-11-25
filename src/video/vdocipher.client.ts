@@ -1,13 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { envString } from '../billing/gateways';
+import { IntegrationSettingsService } from '../integrations/integration-settings.service';
 
 /**
  * security: not in legacy. VdoCipher API client for lesson videos (DRM and a
  * moving watermark; contract: protected media, 2026-11-01).
  *
- *   VDOCIPHER_API_SECRET  API secret (required in production for video uploads)
- *   VDOCIPHER_API_BASE    default https://dev.vdocipher.com/api (tests point it at a stub)
- *   VDOCIPHER_OTP_TTL     playback OTP lifetime in seconds, default 300
+ * Settings (not in legacy, 2026-11-25): Integrations → VdoCipher, read per call:
+ *   API secret  (required in production for video uploads)
+ *   OTP TTL     playback OTP lifetime in seconds, default 300
+ * VDOCIPHER_API_BASE (env, test-only knob): default https://dev.vdocipher.com/api.
  *
  * Without a secret outside production, lesson video uploads fall back to
  * private storage and play through a signed link (`provider: 'url'`).
@@ -26,20 +28,9 @@ export function vdoCipherApiBase(): string {
   ).replace(/\/+$/, '');
 }
 
-export function vdoCipherOtpTtl(): number {
-  const n = Number.parseInt(envString('VDOCIPHER_OTP_TTL'), 10);
-  return Number.isFinite(n) && n > 0 ? Math.min(n, 86_400) : 300;
-}
-
-/** Boot check: production without a secret can't take video uploads; say so once. */
-export function assertVdoCipherConfig() {
-  if (
-    process.env.NODE_ENV === 'production' &&
-    !envString('VDOCIPHER_API_SECRET')
-  )
-    new Logger('VdoCipher').warn(
-      'VDOCIPHER_API_SECRET is not set: lesson video uploads and playback OTPs are refused.',
-    );
+/** Playback OTP lifetime: the saved TTL (30 s – 24 h), default 300. */
+export function vdoCipherOtpTtl(saved: number | null): number {
+  return saved && saved > 0 ? Math.min(saved, 86_400) : 300;
 }
 
 interface UploadCredentials {
@@ -59,13 +50,20 @@ interface UploadCredentials {
 export class VdoCipherClient {
   private readonly logger = new Logger(VdoCipherClient.name);
 
-  private secret(): string | null {
-    return envString('VDOCIPHER_API_SECRET') || null;
+  constructor(private readonly settings: IntegrationSettingsService) {}
+
+  private async secret(): Promise<string | null> {
+    return (await this.settings.get('vdocipher')).api_secret || null;
   }
 
   /** True when the API secret is set. */
-  configured(): boolean {
-    return this.secret() !== null;
+  async configured(): Promise<boolean> {
+    return (await this.secret()) !== null;
+  }
+
+  /** not in legacy: the super admin's "Test": an authenticated list of one video. */
+  async test(): Promise<void> {
+    await this.call('GET', '/videos?page=1&limit=1');
   }
 
   private async call<T>(
@@ -74,7 +72,7 @@ export class VdoCipherClient {
     body?: unknown,
     timeoutMs = 15_000,
   ): Promise<T> {
-    const secret = this.secret();
+    const secret = await this.secret();
     if (!secret) throw new VdoCipherError('VdoCipher is not configured');
     let res: Response;
     try {
@@ -106,9 +104,10 @@ export class VdoCipherClient {
   async otp(
     videoId: string,
     watermark: string,
-    ttl = vdoCipherOtpTtl(),
+    ttl?: number,
   ): Promise<{ otp: string; playbackInfo: string; ttl: number }> {
     if (!isVideoId(videoId)) throw new VdoCipherError('Invalid video id');
+    ttl ??= vdoCipherOtpTtl((await this.settings.get('vdocipher')).otp_ttl);
     const json = await this.call<{ otp?: string; playbackInfo?: string }>(
       'POST',
       `/videos/${videoId}/otp`,
@@ -191,12 +190,27 @@ export class VdoCipherClient {
     return json.id;
   }
 
+  /** not in legacy: a video's processing status (`ready` once playable). */
+  async status(videoId: string): Promise<string> {
+    if (!isVideoId(videoId)) throw new VdoCipherError('Invalid video id');
+    const json = await this.call<{ status?: unknown }>(
+      'GET',
+      `/videos/${videoId}`,
+    );
+    return typeof json.status === 'string' ? json.status : '';
+  }
+
+  /** Delete videos; throws on failure (the `video-delete` job retries). */
+  async delete(...ids: (string | null | undefined)[]) {
+    const valid = ids.filter(isVideoId);
+    if (!valid.length || !(await this.configured())) return;
+    await this.call('DELETE', `/videos?videos=${valid.join(',')}`);
+  }
+
   /** Delete videos, best-effort: failures are logged, never thrown. */
   async deleteBestEffort(...ids: (string | null | undefined)[]) {
-    const valid = ids.filter(isVideoId);
-    if (!valid.length || !this.configured()) return;
     try {
-      await this.call('DELETE', `/videos?videos=${valid.join(',')}`);
+      await this.delete(...ids);
     } catch (e) {
       this.logger.warn(`Could not delete VdoCipher video(s): ${String(e)}`);
     }

@@ -11,16 +11,31 @@ import { AppModule } from './app.module';
 import { configureApp } from './app.setup';
 import { assertProxyConfig } from './common/http/client-ip';
 import { assertFileUrlConfig } from './storage/file-url';
-import { assertVdoCipherConfig } from './video/vdocipher.client';
+import { Logger } from '@nestjs/common';
+import { runWorker } from './worker';
 
 async function bootstrap() {
   // security: not in legacy. Fail closed: production refuses to start without
   // FILE_URL_SECRET/FILES_BASE_URL (signed private-file links) or PROXY_SECRET.
   assertFileUrlConfig();
   assertProxyConfig();
-  assertVdoCipherConfig();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   configureApp(app);
   await app.listen(Number(process.env.PORT ?? 4000));
 }
-void bootstrap();
+
+// not in legacy: one build, two roles. APP_TYPE=WEB (default) serves the HTTP API
+// (Elastic Beanstalk); APP_TYPE=WORKER runs the background jobs (PM2 on the worker host).
+const appType = (process.env.APP_TYPE || 'WEB').trim().toUpperCase();
+if (appType === 'WORKER')
+  runWorker().catch((e: unknown) => {
+    new Logger('Worker').error(e instanceof Error ? e.message : String(e));
+    process.exit(1);
+  });
+else if (appType === 'WEB') void bootstrap();
+else {
+  console.error(
+    `APP_TYPE must be WEB or WORKER, not "${process.env.APP_TYPE}"`,
+  );
+  process.exit(1);
+}

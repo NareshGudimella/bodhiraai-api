@@ -5,22 +5,21 @@ import type { AuthedRequest } from '../common/decorators/auth.decorators';
 import { Public } from '../common/decorators/auth.decorators';
 import { Client, type ClientInfo } from '../common/decorators/client.decorator';
 import { RateLimit } from '../common/decorators/rate-limit';
-import { envString } from '../billing/gateways';
 import { DB, type Db } from '../db/db';
+import { IntegrationSettingsService } from '../integrations/integration-settings.service';
 import { lessons } from '../db/schema';
 import { vdoCipherApiBase } from '../video/vdocipher.client';
 import { SettingsService } from './settings.service';
 
-/** config('services.vdocipher.video_id'). */
-const DEFAULT_VIDEO = () =>
-  envString('VDOCIPHER_VIDEO_ID') || 'a69b203eb0fe4c5196ecf06e6261c66c';
+/** config('services.vdocipher.video_id') default; overridden under Integrations → VdoCipher. */
+const LEGACY_DEFAULT_VIDEO = 'a69b203eb0fe4c5196ecf06e6261c66c';
 
 /** The CMS setting the home page's video button reads (home.blade.php). */
 const HOME_VIDEO_SETTING = 'media.home_video_id';
 
-/** VDOCIPHER_PUBLIC_VIDEO_IDS: extra comma-separated marketing video ids. */
-const extraPublicIds = () =>
-  envString('VDOCIPHER_PUBLIC_VIDEO_IDS')
+/** Extra comma-separated marketing video ids (Integrations → VdoCipher). */
+const idList = (ids: string | null) =>
+  (ids ?? '')
     .split(',')
     .map((id) => id.trim())
     .filter((id) => id !== '');
@@ -35,12 +34,13 @@ const dMYHi = (d: Date) =>
  * Port of VideoController::otp + VdoCipherService::otp: a fresh playback OTP
  * for the marketing site's secure video, fetched when the visitor clicks
  * play. Same bare JSON replies as legacy (not the API envelope).
- * VDOCIPHER_API_SECRET, VDOCIPHER_VIDEO_ID (default video), VDOCIPHER_WATERMARK.
+ * Settings: Integrations → VdoCipher (API secret, marketing video id, public
+ * video ids; not in legacy, 2026-11-25: legacy read the environment).
  *
  * security: not in legacy. Legacy signed an OTP for any 32-hex id, which
  * would let anyone play a lesson video without the paywall. Only marketing
- * videos are served: VDOCIPHER_VIDEO_ID, the `media.home_video_id` setting and
- * VDOCIPHER_PUBLIC_VIDEO_IDS, never an id used by a lesson (those play through
+ * videos are served: the marketing video id, the `media.home_video_id` setting and
+ * the public video ids, never an id used by a lesson (those play through
  * GET /lessons/:id/playback). Refusals look like the invalid-id reply.
  */
 @Controller('video')
@@ -49,6 +49,7 @@ export class VideoController {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly settings: SettingsService,
+    private readonly integrations: IntegrationSettingsService,
   ) {}
 
   @Get('otp')
@@ -59,16 +60,24 @@ export class VideoController {
     @Client() client: ClientInfo,
     @Res() res: Response,
   ) {
-    const videoId = typeof raw === 'string' ? raw : DEFAULT_VIDEO();
+    const vdo = await this.integrations.get('vdocipher');
+    const defaultVideo = vdo.marketing_video_id || LEGACY_DEFAULT_VIDEO;
+    const videoId = typeof raw === 'string' ? raw : defaultVideo;
     // VdoCipher ids are 32 hex chars — reject anything else.
-    if (!/^[a-f0-9]{32}$/i.test(videoId) || !(await this.isPublic(videoId))) {
+    if (
+      !/^[a-f0-9]{32}$/i.test(videoId) ||
+      !(await this.isPublic(videoId, [
+        defaultVideo,
+        ...idList(vdo.public_video_ids),
+      ]))
+    ) {
       res.status(422).json({ error: 'invalid_video_id' });
       return;
     }
     // Traceable watermark: the signed-in viewer's email, else IP · time.
     const watermark =
       req.user?.email ?? `${client.ip ?? ''} · ${dMYHi(new Date())}`;
-    const data = await this.fetchOtp(videoId, 300, watermark);
+    const data = await this.fetchOtp(vdo.api_secret, videoId, 300, watermark);
     if (!data) {
       res.status(502).json({ error: 'unavailable' });
       return;
@@ -77,10 +86,9 @@ export class VideoController {
   }
 
   /** security: not in legacy. A marketing video id that no lesson uses. */
-  private async isPublic(videoId: string): Promise<boolean> {
+  private async isPublic(videoId: string, allowed: string[]): Promise<boolean> {
     const id = videoId.toLowerCase();
     const home = await this.settings.get(HOME_VIDEO_SETTING);
-    const allowed = [DEFAULT_VIDEO(), ...extraPublicIds()];
     if (typeof home === 'string') allowed.push(home);
     if (!allowed.some((a) => a.toLowerCase() === id)) return false;
     const lessonVideo = await this.db
@@ -91,8 +99,12 @@ export class VideoController {
     return lessonVideo.length === 0;
   }
 
-  private async fetchOtp(videoId: string, ttl: number, watermark: string) {
-    const secret = envString('VDOCIPHER_API_SECRET');
+  private async fetchOtp(
+    secret: string | null,
+    videoId: string,
+    ttl: number,
+    watermark: string,
+  ) {
     if (!secret) return null;
     const payload: Record<string, unknown> = { ttl };
     const text = watermark;

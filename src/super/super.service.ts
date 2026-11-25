@@ -43,6 +43,7 @@ import { StorageService } from '../storage/storage.service';
 import type { IncomingFile } from '../storage/upload-rules';
 import { themeFromImage } from './color-extractor';
 import { dayAgo, monthDay, onDay } from '../admin/admin.service';
+import { IntegrationSettingsService } from '../integrations/integration-settings.service';
 
 /** SuperAdminService::PLAN_PRICING: monthly per-school revenue assumption (₹). */
 export const PLAN_PRICING: Record<string, number> = {
@@ -90,6 +91,7 @@ export class SuperService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly storage: StorageService,
+    private readonly integrations: IntegrationSettingsService,
   ) {}
 
   async dashboard() {
@@ -313,7 +315,7 @@ export class SuperService {
         max_students: int(data.max_students ?? 500),
         ai_daily_token_limit: int(
           data.ai_daily_token_limit ??
-            (Number(process.env.AI_DAILY_TOKEN_LIMIT) || 5000),
+            ((await this.integrations.get('ai')).daily_token_limit || 5000),
         ),
         status: 'active',
         created_at: now,
@@ -623,7 +625,7 @@ export class SuperService {
       checks.push({
         name: 'Storage',
         status: 'healthy',
-        detail: `R2 bucket ${process.env.R2_BUCKET ?? ''}`,
+        detail: `R2 bucket ${(await this.storage.r2Config())?.bucket ?? ''}`,
         latency_ms: null,
       });
     } else {

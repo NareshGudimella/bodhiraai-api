@@ -1,0 +1,85 @@
+# Deploys the background-job worker to the worker host over SSH (DEPLOY.md §4, §6)
+# after CI passes on main, or by hand (Actions → Deploy worker → Run workflow).
+# GitHub builds the app; the build (dist/, assets/, package files, PM2 config) is
+# copied to DEPLOY_PATH/releases/<commit>, production dependencies are installed
+# there (native modules must match the host), `current` points at it and the PM2
+# app restarts. The web API still deploys to Elastic Beanstalk with
+# scripts/deploy.sh (SKIP_WORKER=1 there once this workflow owns the worker).
+#
+# GitHub → Settings → Environments → production:
+#   secret   WORKER_SSH_KEY          the deploy user's private key (deploy-only, ed25519)
+#   variable WORKER_SSH_HOST         the worker host's public IP / DNS
+#   variable WORKER_SSH_USER         the deploy user that runs PM2 (e.g. ec2-user)
+#   variable WORKER_SSH_KNOWN_HOSTS  output of `ssh-keyscan -t ed25519 <host>` (pins the host key)
+#   variable WORKER_SSH_PORT         optional, default 22
+#   variable DEPLOY_PATH             the app's folder on the host (e.g. /opt/bodhiraai-api);
+#                                    it must hold the .env, and the deploy user must own it
+name: Deploy worker
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time; a newer one waits instead of cancelling a deploy halfway.
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-24.04
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The commit CI checked (workflow_run), or the chosen branch (manual run).
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      - name: SSH setup
+        env:
+          KEY: ${{ secrets.WORKER_SSH_KEY }}
+          KNOWN_HOSTS: ${{ vars.WORKER_SSH_KNOWN_HOSTS }}
+          HOST: ${{ vars.WORKER_SSH_HOST }}
+          SSH_USER: ${{ vars.WORKER_SSH_USER }}
+          PORT: ${{ vars.WORKER_SSH_PORT }}
+        run: |
+          for v in KEY KNOWN_HOSTS HOST SSH_USER; do
+            [ -n "${!v}" ] || { echo "::error::Missing $v: set it in the production environment"; exit 1; }
+          done
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/worker_key && chmod 600 ~/.ssh/worker_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<CONF
+          Host worker
+            HostName $HOST
+            User $SSH_USER
+            Port ${PORT:-22}
+            IdentityFile ~/.ssh/worker_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            ConnectTimeout 15
+          CONF
+
+      - name: Copy build and restart PM2
+        env:
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+        run: |
+          [ -n "$DEPLOY_PATH" ] || { echo "::error::Missing DEPLOY_PATH: set it in the production environment"; exit 1; }
+          scripts/deploy-worker.sh worker "$(git rev-parse HEAD)"
+
+      - name: Remove key
+        if: always()
+        run: rm -f ~/.ssh/worker_key

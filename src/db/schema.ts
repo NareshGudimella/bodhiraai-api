@@ -11,6 +11,7 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   pgTable,
   primaryKey,
   smallint,
@@ -843,6 +844,12 @@ export const lessons = pgTable(
     // security: not in legacy (Node-only column): the VdoCipher video id of an
     // uploaded lesson video. When set, content_url is null.
     video_id: text('video_id'),
+    // not in legacy (Node-only): an uploaded video being imported into
+    // VdoCipher by the worker. `processing` while it runs (video_upload_key is
+    // the temporary private-bucket object), `failed` when it gave up (the
+    // editor uploads again), null otherwise.
+    video_status: text('video_status'),
+    video_upload_key: text('video_upload_key'),
     duration_sec: bigint('duration_sec', { mode: 'number' })
       .notNull()
       .default(0),
@@ -2646,6 +2653,20 @@ export const mail_settings = pgTable('mail_settings', {
   password_enc: text('password_enc'),
   from_address: citext('from_address').notNull(),
   from_name: citext('from_name'),
+  updated_by: bigint('updated_by', { mode: 'bigint' }),
+  updated_at: timestamp('updated_at', { mode: 'date', precision: 3 }).notNull(),
+});
+
+// not in legacy: provider settings edited by the super admin under Integrations
+// (`src/integrations/`): one row per provider (`storage`, `sms`, `payments`, `ai`,
+// `vdocipher`). `settings` holds the plain values; `secrets` maps a field name
+// to its AES-256-GCM ciphertext (`mail/mail-crypto.ts`), never returned by the API.
+export const integration_settings = pgTable('integration_settings', {
+  provider: citext('provider').primaryKey(),
+  settings: jsonb('settings')
+    .$type<Record<string, string | number | boolean | null>>()
+    .notNull(),
+  secrets: jsonb('secrets').$type<Record<string, string>>().notNull(),
   updated_by: bigint('updated_by', { mode: 'bigint' }),
   updated_at: timestamp('updated_at', { mode: 'date', precision: 3 }).notNull(),
 });

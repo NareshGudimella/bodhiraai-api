@@ -94,14 +94,14 @@ export class AuthController {
     return ok(await this.auth.login(dto), 'Logged in.');
   }
 
-  // The OTP routes check OTP_LOGIN_ENABLED before they count against the
+  // The OTP routes check that OTP is available (otpDelivery) before they count against the
   // extra limits below (a disabled feature answers 503 without touching state).
   @Public()
   @RateLimit(LIMITS.otp, 'phone')
   @Post('otp/send')
   @HttpCode(200)
   async sendOtp(@Body() dto: SendOtpDto, @Client() client: ClientInfo) {
-    this.auth.assertOtpEnabled();
+    await this.auth.assertOtpEnabled();
     // security: not in legacy: also per IP and per normalised phone per hour
     // (the route limit above is per raw phone string, 3 a minute).
     await this.limiter.hit('otp-send-ip', client.ip ?? '', 20, HOUR);
@@ -114,7 +114,7 @@ export class AuthController {
   @Post('otp/verify')
   @HttpCode(200)
   async verifyOtp(@Body() dto: VerifyOtpDto) {
-    this.auth.assertOtpEnabled();
+    await this.auth.assertOtpEnabled();
     // security: not in legacy: per phone as well as per IP (the route limit above),
     // so guesses spread over many addresses still stop.
     await this.limiter.hit(

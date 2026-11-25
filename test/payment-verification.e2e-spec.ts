@@ -16,6 +16,7 @@ import { DB, type Db } from '../src/db/db';
 import { invoices, subscriptions, users } from '../src/db/schema';
 import type { subscriptions as Subscription } from '../src/db/types';
 import { StorageService } from '../src/storage/storage.service';
+import { stubIntegrations } from './integrations';
 
 loadEnv();
 
@@ -39,13 +40,13 @@ describe('Payment verification (e2e)', () => {
   let saved: Subscription[];
   let maxSub: bigint;
   let maxInvoice: bigint;
-  const env = [
-    'RAZORPAY_KEY_ID',
-    'RAZORPAY_KEY_SECRET',
-    'STRIPE_SECRET',
-    'BILLING_GATEWAY',
-  ];
-  const envBefore: Record<string, string | undefined> = {};
+  let settings: ReturnType<typeof stubIntegrations>;
+  const RAZORPAY = {
+    gateway: 'razorpay',
+    razorpay_key_id: 'rzp_test_e2e',
+    razorpay_key_secret: SECRET,
+    stripe_secret: null,
+  } as const;
 
   const post = (path: string, body: object) =>
     request(app.getHttpServer())
@@ -67,11 +68,6 @@ describe('Payment verification (e2e)', () => {
   };
 
   beforeAll(async () => {
-    for (const k of env) envBefore[k] = process.env[k];
-    process.env.RAZORPAY_KEY_ID = 'rzp_test_e2e';
-    process.env.RAZORPAY_KEY_SECRET = SECRET;
-    delete process.env.STRIPE_SECRET;
-    delete process.env.BILLING_GATEWAY;
     let n = 0;
     fetchSpy = jest.spyOn(global, 'fetch').mockImplementation((url) => {
       if (url !== 'https://api.razorpay.com/v1/orders') {
@@ -88,6 +84,8 @@ describe('Payment verification (e2e)', () => {
       moduleRef.createNestApplication<NestExpressApplication>(),
     );
     await app.init();
+    settings = stubIntegrations(app);
+    settings.set('payments', RAZORPAY);
     db = app.get<Db>(DB);
     const student = (await db.query.users.findFirst({
       where: eq(users.id, STUDENT),
@@ -122,10 +120,6 @@ describe('Payment verification (e2e)', () => {
       .set('Authorization', `Bearer ${token}`);
     await app.close();
     fetchSpy.mockRestore();
-    for (const k of env) {
-      if (envBefore[k] === undefined) delete process.env[k];
-      else process.env[k] = envBefore[k];
-    }
   });
 
   it('sends a paywall choice to checkout instead of activating it', async () => {
@@ -241,10 +235,12 @@ describe('Payment verification (e2e)', () => {
   });
 
   it('refuses demo completion when another gateway is live', async () => {
-    delete process.env.RAZORPAY_KEY_ID;
-    delete process.env.RAZORPAY_KEY_SECRET;
-    process.env.BILLING_GATEWAY = 'stripe';
-    process.env.STRIPE_SECRET = 'sk_test_e2e';
+    settings.set('payments', {
+      gateway: 'stripe',
+      razorpay_key_id: null,
+      razorpay_key_secret: null,
+      stripe_secret: 'sk_test_e2e',
+    });
     try {
       const res = await post(`/billing/checkout/${saved[0].id}/complete`, {
         cycle: 'yearly',
@@ -252,10 +248,7 @@ describe('Payment verification (e2e)', () => {
       }).expect(422);
       expect(res.body.code).toBe('payment_unavailable');
     } finally {
-      process.env.RAZORPAY_KEY_ID = 'rzp_test_e2e';
-      process.env.RAZORPAY_KEY_SECRET = SECRET;
-      delete process.env.BILLING_GATEWAY;
-      delete process.env.STRIPE_SECRET;
+      settings.set('payments', RAZORPAY);
     }
   });
 });

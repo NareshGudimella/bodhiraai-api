@@ -13,6 +13,7 @@ import { loadEnv } from '../src/config/env';
 import { eq } from 'drizzle-orm';
 import { DB, type Db } from '../src/db/db';
 import { users } from '../src/db/schema';
+import { stubIntegrations } from './integrations';
 
 loadEnv();
 
@@ -33,7 +34,6 @@ describe('Billing (e2e)', () => {
   const B2C_STUDENT = 10n;
 
   beforeAll(async () => {
-    process.env.RAZORPAY_WEBHOOK_SECRET = 'e2e-secret';
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -41,6 +41,9 @@ describe('Billing (e2e)', () => {
       moduleRef.createNestApplication<NestExpressApplication>(),
     );
     await app.init();
+    stubIntegrations(app).set('payments', {
+      razorpay_webhook_secret: 'e2e-secret',
+    });
     for (const [who, identifier] of [
       ['admin', 'admin@bodhira.test'],
       ['super', 'super@bodhira.test'],
@@ -65,7 +68,6 @@ describe('Billing (e2e)', () => {
         .post('/api/v1/auth/logout')
         .set(as(who));
     }
-    delete process.env.RAZORPAY_WEBHOOK_SECRET;
     await app.close();
   });
 

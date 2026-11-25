@@ -27,6 +27,7 @@ import {
 } from '../src/db/schema';
 import type { users as User } from '../src/db/types';
 import { signFileKey } from '../src/storage/file-url';
+import { stubIntegrations } from './integrations';
 
 loadEnv();
 
@@ -57,6 +58,7 @@ interface StubCall {
  */
 describe('Protected media (e2e)', () => {
   let app: NestExpressApplication;
+  let settings: ReturnType<typeof stubIntegrations>;
   let db: Db;
   let tokens: TokenService;
   let stub: Server;
@@ -190,9 +192,7 @@ describe('Protected media (e2e)', () => {
     setEnv('FILE_URL_SECRET', SECRET);
     setEnv('FILES_BASE_URL', 'http://files.e2e.test');
     setEnv('FILE_URL_TTL', '1800');
-    setEnv('VDOCIPHER_API_SECRET', VDO_SECRET);
     setEnv('VDOCIPHER_API_BASE', stubBase);
-    setEnv('VDOCIPHER_OTP_TTL', undefined);
     setEnv('STORAGE_DRIVER', 'local');
 
     const moduleRef = await Test.createTestingModule({
@@ -202,6 +202,8 @@ describe('Protected media (e2e)', () => {
       moduleRef.createNestApplication<NestExpressApplication>(),
     );
     await app.init();
+    settings = stubIntegrations(app);
+    settings.set('vdocipher', { api_secret: VDO_SECRET });
     db = app.get<Db>(DB);
     tokens = app.get(TokenService);
 
@@ -597,7 +599,7 @@ describe('Protected media (e2e)', () => {
     });
 
     it('falls back to private storage without a VdoCipher secret (outside production)', async () => {
-      setEnv('VDOCIPHER_API_SECRET', undefined);
+      settings.reset('vdocipher');
       try {
         const created = await http()
           .post(`/api/v1/content/chapters/${chapterId}/lessons`)
@@ -624,7 +626,7 @@ describe('Protected media (e2e)', () => {
           .expect(206);
         expect(video.headers['content-type']).toBe('video/webm');
       } finally {
-        setEnv('VDOCIPHER_API_SECRET', VDO_SECRET);
+        settings.set('vdocipher', { api_secret: VDO_SECRET });
       }
     });
 

@@ -1,10 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { Injectable, Logger } from '@nestjs/common';
+import { IntegrationSettingsService } from '../integrations/integration-settings.service';
+import type { AiConfig } from '../integrations/integrations';
 import { SYSTEM_PROMPT } from './ai-tutor';
 
 /**
  * The legacy default model (config `ANTHROPIC_MODEL`, unchanged for parity).
- * Override per environment with ANTHROPIC_MODEL.
+ * not in legacy: overridden under Integrations → AI tutor (empty = this).
  */
 const LEGACY_DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
 
@@ -15,43 +17,74 @@ export interface ClaudeReply {
   outputTokens: number;
 }
 
-/** `max_tokens` for one reply (ANTHROPIC_MAX_TOKENS, default 1024). */
-export const maxReplyTokens = () =>
-  Number(process.env.ANTHROPIC_MAX_TOKENS) || 1024;
+/** The settings a live call uses (Integrations → AI tutor). */
+export interface LiveAi {
+  apiKey: string;
+  model: string;
+  /** `max_tokens` for one reply (default 1024). */
+  maxTokens: number;
+}
+
+const liveOf = (c: AiConfig): LiveAi | null =>
+  c.api_key
+    ? {
+        apiKey: c.api_key,
+        model: c.model || LEGACY_DEFAULT_MODEL,
+        maxTokens: c.max_tokens || 1024,
+      }
+    : null;
 
 /**
  * Thin wrapper over the Anthropic Messages API for the AI tutor.
  * Returns null when no key is configured or the call fails, so callers can fall
  * back to the canned reply (AiService::generateAssistantResponse).
+ * Settings are read per call; the SDK client is rebuilt when the key changes.
  */
 @Injectable()
 export class ClaudeClient {
   private readonly logger = new Logger(ClaudeClient.name);
-  private client: Anthropic | null = null;
+  private client: { key: string; sdk: Anthropic } | null = null;
 
-  private get apiKey() {
-    return (process.env.ANTHROPIC_API_KEY ?? '').trim();
+  constructor(private readonly settings: IntegrationSettingsService) {}
+
+  /** The live settings, or null when no API key is saved. */
+  async live(): Promise<LiveAi | null> {
+    return liveOf(await this.settings.get('ai'));
   }
 
-  get configured() {
-    return this.apiKey !== '';
+  private sdk(apiKey: string): Anthropic {
+    if (this.client?.key !== apiKey)
+      // 60 s per attempt (the SDK default is 10 min); the student is waiting on this.
+      this.client = {
+        key: apiKey,
+        sdk: new Anthropic({ apiKey, timeout: 60_000 }),
+      };
+    return this.client.sdk;
   }
 
-  private sdk(): Anthropic {
-    // 60 s per attempt (the SDK default is 10 min); the student is waiting on this.
-    this.client ??= new Anthropic({ apiKey: this.apiKey, timeout: 60_000 });
-    return this.client;
+  /** not in legacy: the super admin's "Test": a one-token completion. Throws on failure. */
+  async test(): Promise<string> {
+    const live = await this.live();
+    if (!live) throw new Error('No API key is saved.');
+    const response = await this.sdk(live.apiKey).messages.create({
+      model: live.model,
+      max_tokens: 1,
+      messages: [{ role: 'user', content: 'ping' }],
+    });
+    return response.model;
   }
 
   async reply(
     messages: Anthropic.MessageParam[],
     context: { sessionId: bigint },
+    live?: LiveAi | null,
   ): Promise<ClaudeReply | null> {
-    if (!this.configured) return null;
+    live ??= await this.live();
+    if (!live) return null;
     try {
-      const response = await this.sdk().messages.create({
-        model: process.env.ANTHROPIC_MODEL || LEGACY_DEFAULT_MODEL,
-        max_tokens: maxReplyTokens(),
+      const response = await this.sdk(live.apiKey).messages.create({
+        model: live.model,
+        max_tokens: live.maxTokens,
         system: SYSTEM_PROMPT,
         messages,
       });

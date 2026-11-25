@@ -30,7 +30,7 @@ const school = {
 describe('SuperService.updateSchool plan handling', () => {
   it('treats an empty plan as unchanged instead of writing null (plan is NOT NULL)', async () => {
     const { db, updates } = fakeDb();
-    const svc = new SuperService(db, {} as never);
+    const svc = new SuperService(db, {} as never, {} as never);
     await svc.updateSchool(school, { name: 'New', plan: null });
     expect(updates[0]).toMatchObject({ name: 'New' });
     expect(updates[0]).not.toHaveProperty('plan');
@@ -38,14 +38,14 @@ describe('SuperService.updateSchool plan handling', () => {
 
   it('writes nothing at all when only an empty plan was sent', async () => {
     const { db, updates } = fakeDb();
-    const svc = new SuperService(db, {} as never);
+    const svc = new SuperService(db, {} as never, {} as never);
     await svc.updateSchool(school, { plan: null });
     expect(updates).toHaveLength(0);
   });
 
   it('still changes the plan when one is given', async () => {
     const { db, updates } = fakeDb();
-    const svc = new SuperService(db, {} as never);
+    const svc = new SuperService(db, {} as never, {} as never);
     await svc.updateSchool(school, { plan: 'starter' });
     expect(updates[0]).toMatchObject({ plan: 'starter' });
   });

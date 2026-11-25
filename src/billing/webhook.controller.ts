@@ -58,7 +58,7 @@ export class WebhookController {
     const payload = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '';
     const sig = req.headers[header];
     const signature = Array.isArray(sig) ? (sig[0] ?? '') : (sig ?? '');
-    const gateway = this.billing.gateway(name);
+    const gateway = await this.billing.gateway(name);
     try {
       const event = gateway.verifyWebhook(payload, signature);
       const payment = await gateway.applyEvent(event);
@@ -70,7 +70,7 @@ export class WebhookController {
       const msg = e instanceof Error ? e.message : String(e);
       this.logger.warn(`${label} webhook rejected: ${msg}`);
       // security: not in legacy: only signature/format problems are echoed; config
-      // and database errors ("…SECRET not set") stay in the server log.
+      // and database errors ("… webhook secret not set") stay in the server log.
       res.status(400).json({
         ok: false,
         error: CLIENT_SAFE.test(msg) ? msg : 'Webhook rejected.',

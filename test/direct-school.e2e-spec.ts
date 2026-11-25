@@ -24,6 +24,7 @@ import {
   users,
 } from '../src/db/schema';
 import type { schools as School, users as User } from '../src/db/types';
+import { stubIntegrations } from './integrations';
 
 loadEnv();
 
@@ -203,7 +204,6 @@ describe('Bodhira Direct and school content (e2e)', () => {
       });
     });
     await new Promise<void>((r) => stub.listen(0, '127.0.0.1', r));
-    setEnv('VDOCIPHER_API_SECRET', VDO_SECRET);
     setEnv(
       'VDOCIPHER_API_BASE',
       `http://127.0.0.1:${(stub.address() as AddressInfo).port}`,
@@ -216,6 +216,7 @@ describe('Bodhira Direct and school content (e2e)', () => {
       moduleRef.createNestApplication<NestExpressApplication>(),
     );
     await app.init();
+    stubIntegrations(app).set('vdocipher', { api_secret: VDO_SECRET });
     db = app.get<Db>(DB);
     tokens = app.get(TokenService);
 
