@@ -8,12 +8,19 @@ import {
 import { UnrecoverableError } from 'bullmq';
 import { and, eq, isNotNull } from 'drizzle-orm';
 import { createHash, randomBytes } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { DB, type Db } from '../db/db';
 import { lessons } from '../db/schema';
 import { JobsService, logSafe } from '../jobs/jobs.service';
 import { encryptSecret } from '../mail/mail-crypto';
 import { StorageService } from '../storage/storage.service';
-import { transcodeToHls, UnreadableVideo } from './hls-transcode';
+import {
+  assertDiskSpace,
+  transcodeToHls,
+  UnreadableVideo,
+} from './hls-transcode';
 
 /**
  * not in legacy: lesson-video jobs (docs/video-hls-contract.md).
@@ -161,15 +168,18 @@ export class VideoJobs
     );
     const prefix = `hls/${lessonId}/${randomBytes(8).toString('hex')}/`;
     try {
-      const original = await this.storage.getPrivate(key);
-      if (!original) throw new Error('The uploaded original is missing');
-      const { files, key: aesKey } = await transcodeToHls(original);
-      for (const f of files)
-        await this.storage.putPrivate(
-          `${prefix}${f.name}`,
-          f.bytes,
-          f.contentType,
+      const size = await this.storage.sizeOfPrivate(key);
+      if (size === null) throw new Error('The uploaded original is missing');
+      const aesKey = await this.withOriginal(key, size, async (src) => {
+        const { key: aes } = await transcodeToHls(src, (f) =>
+          this.storage.putPrivateFile(
+            `${prefix}${f.name}`,
+            f.path,
+            f.contentType,
+          ),
         );
+        return aes;
+      });
       const [kept] = await this.db
         .update(lessons)
         .set({
@@ -193,6 +203,28 @@ export class VideoJobs
       const unreadable = e instanceof UnreadableVideo;
       if (final || unreadable) await this.fail(lessonId, key);
       throw unreadable ? new UnrecoverableError(e.message) : e;
+    }
+  }
+
+  /**
+   * Runs `fn` with the original on disk: the local file itself, or an R2
+   * object streamed to a temp file (removed afterwards) once there is room.
+   */
+  private async withOriginal<T>(
+    key: string,
+    size: number,
+    fn: (path: string) => Promise<T>,
+  ): Promise<T> {
+    const local = await this.storage.localPrivatePath(key);
+    const dir = await mkdtemp(join(tmpdir(), 'bodhira-src-'));
+    try {
+      await assertDiskSpace(dir, size, !local);
+      if (local) return await fn(local);
+      const path = join(dir, 'original');
+      await this.storage.downloadPrivate(key, path);
+      return await fn(path);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   }
 

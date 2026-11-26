@@ -7,6 +7,8 @@ import type { Db } from '../db/db';
 import type { JobsService } from '../jobs/jobs.service';
 import { decryptSecret } from '../mail/mail-crypto';
 import { StorageService } from '../storage/storage.service';
+import { apiOrigin, signUpload, verifyUpload } from './direct-upload';
+import { assertDiskSpace, transcodeToHls } from './hls-transcode';
 import { VideoJobs } from './video-jobs.service';
 
 const KEY = 'video-imports/lessons/1/clip-abcdefgh.mp4';
@@ -146,6 +148,24 @@ describe('VideoJobs (video-transcode job, real ffmpeg)', () => {
     expect(await storage.getPrivate(KEY)).toBeNull();
   }, 120_000);
 
+  it('transcodeToHls streams a file path to per-file uploads from disk', async () => {
+    const seen: Record<string, number> = {};
+    const { key } = await transcodeToHls(join(dir, 'clip.mp4'), async (f) => {
+      seen[f.name] = (await stat(f.path)).size; // exists while uploading
+    });
+    expect(key).toHaveLength(16);
+    expect(Object.keys(seen)).toEqual(
+      expect.arrayContaining(['master.m3u8', '360p.m3u8', '720p_00000.ts']),
+    );
+  }, 120_000);
+
+  it('refuses a source that does not fit on disk, with a clear message', async () => {
+    await expect(assertDiskSpace(dir, 1e15, true)).rejects.toThrow(
+      /Not enough free disk space/,
+    );
+    await expect(assertDiskSpace(dir, 1000, true)).resolves.toBeUndefined();
+  });
+
   it('gives up on garbage: failed status, original deleted, nothing left under hls/', async () => {
     const lesson = processing();
     const { svc, sets, storage } = setup(lesson);
@@ -247,5 +267,33 @@ describe('VideoJobs: FFmpeg only on the worker (not in legacy)', () => {
     expect(
       new Set(ids.filter((id) => id.startsWith('video-transcode-7-'))).size,
     ).toBe(1);
+  });
+});
+
+describe('upload token (not in legacy)', () => {
+  const g = {
+    lesson: '5',
+    user: '9',
+    filename: 'a.mp4',
+    size: 100,
+    type: 'video/mp4',
+  };
+  it('carries the signed grant and expires after 2 h', () => {
+    const { token } = signUpload(g, 1_000_000);
+    expect(verifyUpload(token, 2_000_000)).toMatchObject(g);
+    expect(verifyUpload(token, 1_000_000 + 3 * 3600_000)).toBeNull();
+    const [payload, sig] = token.split('.');
+    const forged = Buffer.from(
+      JSON.stringify({ ...g, size: 1, exp: 9e9 }),
+    ).toString('base64url');
+    expect(verifyUpload(`${forged}.${sig}`, 2_000_000)).toBeNull();
+    expect(verifyUpload(`${payload}.x`, 2_000_000)).toBeNull();
+    expect(verifyUpload(undefined)).toBeNull();
+  });
+  it('the API origin is api.<WEB_URL host> in production', () => {
+    expect(
+      apiOrigin({ NODE_ENV: 'production', WEB_URL: 'https://bodhiraai.com/' }),
+    ).toBe('https://api.bodhiraai.com');
+    expect(apiOrigin({ PORT: '4000' })).toBe('http://localhost:4000');
   });
 });

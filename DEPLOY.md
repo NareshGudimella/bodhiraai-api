@@ -52,7 +52,7 @@ TLS:
 
 ## 4. Worker host: Redis and the job worker
 
-One small EC2 instance (e.g. `t4g.small`, Amazon Linux 2023, 20 GB gp3) in a private subnet of the Beanstalk VPC, with its own security group (section 2).
+One small EC2 instance (e.g. `t4g.small`, Amazon Linux 2023, **at least 40 GB gp3** for 5 GB lesson videos) in a private subnet of the Beanstalk VPC, with its own security group (section 2).
 
 **ffmpeg** (lesson videos, **this host only**; Beanstalk never transcodes): the `video-transcode` job runs `ffmpeg` and `ffprobe` from PATH on this host and turns each uploaded lesson video into AES-128 encrypted HLS (360p and 720p). Install it:
 
@@ -64,7 +64,7 @@ ffmpeg -version && ffprobe -version
 #   tar xf ffmpeg-release-arm64-static.tar.xz && sudo cp ffmpeg-*-static/{ffmpeg,ffprobe} /usr/local/bin/
 ```
 
-CPU sizing: transcoding is CPU-bound. A `t4g.small` (2 vCPU, burstable) makes a 10-minute 1080p lesson in roughly real time or slower (x264 `veryfast`, both renditions one after the other) and runs out of CPU credits under a steady stream of uploads: it is fine for occasional uploads. For regular use pick `c7g.large` or bigger, and set `WORKER_CONCURRENCY=1` (or 2) so one transcode does not starve the other jobs. The original is read into memory and a temp dir (in `/tmp`, removed afterwards) holds about twice its size: keep the 20 GB disk free. These sizing figures are estimates, not measured on that instance.
+CPU sizing: transcoding is CPU-bound. A `t4g.small` (2 vCPU, burstable) makes a 10-minute 1080p lesson in roughly real time or slower (x264 `veryfast`, both renditions one after the other) and runs out of CPU credits under a steady stream of uploads: it is fine for occasional uploads. For regular use pick `c7g.large` or bigger, and set `WORKER_CONCURRENCY=1` (or 2) so one transcode does not starve the other jobs. The original is streamed from R2 to a temp file and the HLS output is uploaded from disk file by file (nothing is held in memory); `/tmp` needs about 2.5 times the original (original plus ~1.5x output, removed afterwards) and the job fails with a clear message when it does not fit. Sources up to 5 GB therefore need **at least 40 GB gp3** (OS, Redis and headroom included); long transcodes (hours for a 5 GB 1080p source on a small instance) are expected. These sizing figures are estimates, not measured on that instance.
 
 **Redis** (jobs must survive a restart, so AOF persistence is on):
 
@@ -156,6 +156,7 @@ MIGRATE_DATABASE_URL='<session pooler URL>' WORKER_HOST=<ssh host of the worker>
 5. `eb deploy`, rolling one instance at a time with a temporary extra one, labelled with the commit. Then a ping through Cloudflare.
 6. **Configure integrations in the panel** (Super Admin → Integrations and Mail settings). Providers are read only from the panel, so each stays off until saved. On the **first deploy**, copy the legacy values in before step 4, since the worker needs the providers too. `npm run settings:import-env` is a dry run that prints what it would save; `npm run settings:import-env -- --apply` saves. Run it with the production `DATABASE_URL` and `APP_SECRET`, and with the legacy values still in the environment. It skips any provider already saved in the panel, and it saves SMS disabled, so enable SMS there. Or fill in the panel by hand. Then check that each provider shows as configured:
    - Storage: account, keys, buckets and public URL. `private_bucket` (no public domain) holds invoices and private uploads; bind the same bucket to the Worker as `PRIVATE_FILES`.
+   - **Lesson video upload (not in legacy):** the browser PUTs the file (up to 5 GB) straight to the API's own host, `https://api.<WEB_URL host>` (DNS-only in Cloudflare, so no Cloudflare limits), authorised by a signed `?t=` token. `.platform/nginx/conf.d/elasticbeanstalk/video-upload.conf` gives that one route `client_max_body_size 5G`, no request buffering and 3600 s timeouts; the API streams it into R2 (no R2 CORS needed). `CORS_ORIGINS` must list the site origin (PUT is allowed from it). The route is exempt from the `X-Proxy-Secret` rule (the token authorises it). Node's request timeout is raised to 1 h in `main.ts`; the ALB idle timeout is fine while bytes flow.
    - Lesson videos need no provider: they are transcoded by the worker (`ffmpeg`, section 4) and stored in the private R2 bucket.
    - Payments: gateway and keys. **Webhooks need the payment webhook secrets in the panel** (`razorpay_webhook_secret` or `stripe_webhook_secret`); without them the webhook answers a generic 400.
 

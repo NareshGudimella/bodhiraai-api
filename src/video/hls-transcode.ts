@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, statfs, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -115,24 +115,44 @@ export async function probeSize(file: string) {
     : { width: s.width, height: s.height };
 }
 
-export interface HlsOutput {
-  /** File name → bytes (playlists and segments), ready to upload. */
-  files: { name: string; bytes: Buffer; contentType: string }[];
-  /** The raw 16-byte AES-128 key. */
-  key: Buffer;
+export interface HlsFile {
+  name: string;
+  /** On disk, in the temp dir; deleted after `transcodeToHls` returns. */
+  path: string;
+  contentType: string;
 }
 
 /**
- * Transcodes `input` (bytes) and returns the encrypted HLS files. Everything
- * happens in a temp dir that is always removed. Segment names are
+ * Free space needed to transcode a `size`-byte original: the output is about
+ * 1.5 times it, plus the original itself when it has to be downloaded.
+ */
+export async function assertDiskSpace(
+  dir: string,
+  size: number,
+  downloaded: boolean,
+) {
+  const need = Math.ceil(size * (downloaded ? 2.5 : 1.5));
+  const s = await statfs(dir);
+  const free = s.bavail * s.bsize;
+  if (free < need)
+    throw new Error(
+      `Not enough free disk space to transcode: ${Math.ceil(need / 1e9)} GB needed in ${dir}, ${Math.floor(free / 1e9)} GB free`,
+    );
+}
+
+/**
+ * Transcodes the video file at `src` and hands each encrypted HLS file (on
+ * disk) to `upload` one by one; returns the raw 16-byte AES-128 key. Nothing
+ * is held in memory. The temp dir is always removed. Segment names are
  * `<rendition>_%05d.ts`; playlists carry `#EXT-X-KEY` with the placeholder URI
  * `key` (rewritten per request by the API) and a random IV.
  */
-export async function transcodeToHls(input: Buffer): Promise<HlsOutput> {
+export async function transcodeToHls(
+  src: string,
+  upload: (file: HlsFile) => Promise<void>,
+): Promise<{ key: Buffer }> {
   const dir = await mkdtemp(join(tmpdir(), 'bodhira-hls-'));
   try {
-    const src = join(dir, 'source');
-    await writeFile(src, input);
     const { width, height } = await probeSize(src);
     const renditions = chooseRenditions(width, height);
 
@@ -202,18 +222,17 @@ export async function transcodeToHls(input: Buffer): Promise<HlsOutput> {
     }
     await writeFile(join(dir, 'master.m3u8'), masterPlaylist(renditions));
 
-    const files = [];
     for (const name of (await readdir(dir)).sort()) {
       if (!/\.(m3u8|ts)$/.test(name)) continue;
-      files.push({
+      await upload({
         name,
-        bytes: await readFile(join(dir, name)),
+        path: join(dir, name),
         contentType: name.endsWith('.ts')
           ? 'video/mp2t'
           : 'application/vnd.apple.mpegurl',
       });
     }
-    return { files, key };
+    return { key };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

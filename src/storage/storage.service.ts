@@ -3,16 +3,21 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Injectable, Logger } from '@nestjs/common';
 import { IntegrationSettingsService } from '../integrations/integration-settings.service';
 import { isConfigured, type StorageConfig } from '../integrations/integrations';
 import { ApiException } from '../common/http/api.exception';
-import { mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { mkdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import type { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileKeyOf, FILES_PREFIX, signFileKey } from './file-url';
 import { strRandom, strSlug } from './laravel-str';
@@ -35,6 +40,9 @@ export function createR2Client(cfg: StorageConfig): S3Client {
       process.env.R2_ENDPOINT ||
       `https://${cfg.account_id}.r2.cloudflarestorage.com`,
     forcePathStyle: true,
+    // R2 rejects the SDK's default CRC32 trailer/checksum params (presigned PUTs from browsers too).
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
     credentials: {
       accessKeyId: cfg.access_key_id ?? '',
       secretAccessKey: cfg.secret_access_key ?? '',
@@ -446,5 +454,101 @@ export class StorageService {
         return null;
       throw e;
     }
+  }
+
+  // ---- not in legacy: large lesson videos (docs/video-hls-contract.md) ----
+
+  /** `video-imports/<folder>/<slug>-<rand>.<ext>`, the key `store()` would build for a private video. */
+  videoImportKey(folder: string, filename: string, ext: string) {
+    return `${VIDEO_IMPORTS_PREFIX}${folder}/${this.fileName({ originalname: filename } as IncomingFile, ext)}`;
+  }
+
+  /** Size in bytes of a private object, or null when it doesn't exist. */
+  async sizeOfPrivate(key: string): Promise<number | null> {
+    try {
+      const cfg = await this.r2Config();
+      if (!cfg) {
+        const path = StorageService.privatePath(key);
+        return path ? (await stat(path)).size : null;
+      }
+      const res = await this.client(cfg).send(
+        new HeadObjectCommand({
+          Bucket: this.privateBucket(cfg, key),
+          Key: key,
+        }),
+      );
+      return res.ContentLength ?? null;
+    } catch (e) {
+      const err = e as { name?: string; code?: string };
+      if (
+        ['NotFound', 'NoSuchKey'].includes(err.name ?? '') ||
+        err.code === 'ENOENT'
+      )
+        return null;
+      throw e;
+    }
+  }
+
+  /**
+   * Streams `body` into a private object: R2 multipart upload (16 MB parts, 4
+   * in flight, so ~64 MB in memory whatever the size; aborted on error), or a
+   * file under the private dir locally. The caller deletes the key on failure.
+   */
+  async putPrivateStream(key: string, body: Readable, contentType: string) {
+    const cfg = await this.r2Config();
+    if (cfg) {
+      await new Upload({
+        client: this.client(cfg),
+        params: {
+          Bucket: this.privateBucket(cfg, key),
+          Key: key,
+          Body: body,
+          ContentType: contentType,
+        },
+        partSize: 16 * 1024 * 1024,
+        queueSize: 4,
+        leavePartsOnError: false,
+      }).done();
+      return;
+    }
+    const dest = join(StorageService.privateDir(), key);
+    await mkdir(dirname(dest), { recursive: true });
+    await pipeline(body, createWriteStream(dest));
+  }
+
+  /** Where a private object already is on this machine (local driver), else null: no copy needed. */
+  async localPrivatePath(key: string): Promise<string | null> {
+    return (await this.r2Config()) ? null : StorageService.privatePath(key);
+  }
+
+  /** Streams an R2 private object to `dest` (never held in memory). */
+  async downloadPrivate(key: string, dest: string) {
+    const cfg = await this.r2Config();
+    if (!cfg) throw new Error('downloadPrivate needs R2; use localPrivatePath');
+    const res = await this.client(cfg).send(
+      new GetObjectCommand({ Bucket: this.privateBucket(cfg, key), Key: key }),
+    );
+    if (!res.Body) throw new Error('The uploaded original is missing');
+    await pipeline(res.Body as Readable, createWriteStream(dest));
+  }
+
+  /** putPrivate from a file on disk, streamed. */
+  async putPrivateFile(key: string, path: string, contentType: string) {
+    const cfg = await this.r2Config();
+    if (cfg) {
+      await this.client(cfg).send(
+        new PutObjectCommand({
+          Bucket: this.privateBucket(cfg, key),
+          Key: key,
+          Body: createReadStream(path),
+          ContentLength: (await stat(path)).size,
+          ContentType: contentType,
+        }),
+      );
+      return;
+    }
+    const dest = join(StorageService.privateDir(), key);
+    await mkdir(dirname(dest), { recursive: true });
+    await pipeline(createReadStream(path), createWriteStream(dest));
   }
 }

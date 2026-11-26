@@ -13,7 +13,8 @@ import { hkdfSync } from 'node:crypto';
  * worker/app-secret.ts, src/lib/proxy-secret.ts). Changing APP_SECRET changes all
  * of them: set it everywhere at once and re-enter the panel's secrets.
  */
-export type KeyPurpose = 'settings' | 'file-urls' | 'proxy' | 'video';
+export type KeyPurpose =
+  'settings' | 'file-urls' | 'proxy' | 'video' | 'upload';
 
 type Env = Record<string, string | undefined>;
 

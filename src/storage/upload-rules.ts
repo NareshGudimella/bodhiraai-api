@@ -21,6 +21,17 @@ export const MAX_SIZE_MB: Record<UploadCategory, number> = {
   doc: 50,
 };
 
+/** not in legacy: direct-to-R2 lesson video limit (just under R2's single-PUT cap). */
+export const DIRECT_VIDEO_MAX_BYTES = 5_000_000_000;
+
+/** Browser content types of the allowed video extensions. */
+export const VIDEO_CONTENT_TYPES = [
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+  'video/x-matroska',
+];
+
 /** Sniffed families each category accepts (finfo MIME types, grouped by container). */
 const ACCEPTS: Record<UploadCategory, Kind[]> = {
   video: ['mp4', 'matroska'],
@@ -142,3 +153,7 @@ function contentTypeFor(ext: string, kind: Kind): string {
   };
   return byExt[ext] ?? MIME[kind];
 }
+
+/** Do these leading bytes look like a video container (mp4/mov, webm/mkv)? */
+export const looksLikeVideo = (head: Buffer) =>
+  ACCEPTS.video.includes(sniff(head));

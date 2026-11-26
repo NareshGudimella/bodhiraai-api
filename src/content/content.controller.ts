@@ -8,14 +8,23 @@ import {
   Param,
   Patch,
   Post,
+  Put,
+  Query,
+  Req,
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { eq } from 'drizzle-orm';
-import { CurrentUser, Roles } from '../common/decorators/auth.decorators';
+import type { Request } from 'express';
+import { Readable } from 'node:stream';
+import {
+  CurrentUser,
+  Public,
+  Roles,
+} from '../common/decorators/auth.decorators';
 import { ok } from '../common/http/api-response';
-import { ValidationFailed } from '../common/http/api.exception';
+import { ApiException, ValidationFailed } from '../common/http/api.exception';
 import { toModel } from '../common/http/eloquent';
 import { modelNotFound, routeId } from '../common/http/laravel';
 import { laravelValidate } from '../common/http/laravel-validator';
@@ -28,6 +37,7 @@ import {
   questions as questionsTable,
   quizzes as quizzesTable,
   subjects as subjectsTable,
+  users as usersTable,
 } from '../db/schema';
 import type { lessons, users } from '../db/types';
 import { fileKeyOf, ForgedFileUrl, unsignFileUrl } from '../storage/file-url';
@@ -36,12 +46,19 @@ import {
   StorageService,
   VIDEO_IMPORTS_PREFIX,
 } from '../storage/storage.service';
-import { type IncomingFile } from '../storage/upload-rules';
+import {
+  ALLOWED,
+  DIRECT_VIDEO_MAX_BYTES,
+  type IncomingFile,
+  looksLikeVideo,
+  VIDEO_CONTENT_TYPES,
+} from '../storage/upload-rules';
 import {
   storeOrReject,
   uploadOptions,
   validateWithFiles,
 } from '../storage/uploads';
+import { apiOrigin, signUpload, verifyUpload } from '../video/direct-upload';
 import { lessonPlayback } from '../video/lesson-playback';
 import { VideoJobs } from '../video/video-jobs.service';
 import { ContentService } from './content.service';
@@ -385,6 +402,162 @@ export class ContentController {
     if (l.video_upload_key)
       await this.videoJobs.startTranscode(l.id, l.video_upload_key);
     return ok({ id: l.id }, 'Lesson added.');
+  }
+
+  /**
+   * not in legacy: large lesson video upload (docs/video-hls-contract.md). The
+   * browser PUTs the file to this API's own host (`stream` below), which
+   * streams it into storage; local disk answers `multipart` (the file goes with
+   * the lesson form, 200 MB).
+   */
+  @Post('lessons/:lesson/video-upload')
+  @HttpCode(200)
+  async videoUpload(
+    @CurrentUser() user: users,
+    @Param('lesson') raw: string,
+    @Body() body: unknown,
+  ) {
+    const { chapters: chapter, ...lesson } = await this.lesson(raw);
+    this.content.guardSubject(user, chapter?.subjects ?? null);
+    const data = await laravelValidate(this.db, body, {
+      filename: ['required', 'string', 'max:255'],
+      size: ['required', 'integer', 'min:1'],
+      content_type: ['required', 'string'],
+    });
+    const filename = data.filename as string;
+    const ext = (filename.split('.').pop() ?? '').toLowerCase();
+    if (!filename.includes('.') || !ALLOWED.video.includes(ext))
+      throw ValidationFailed.field(
+        'filename',
+        `Extension .${ext} not allowed for video.`,
+      );
+    if (!VIDEO_CONTENT_TYPES.includes(data.content_type as string))
+      throw ValidationFailed.field(
+        'content_type',
+        `MIME type ${String(data.content_type)} does not match a permitted video type.`,
+      );
+    if (Number(data.size) > DIRECT_VIDEO_MAX_BYTES)
+      throw ValidationFailed.field(
+        'size',
+        'File exceeds the 5 GB limit for video uploads.',
+      );
+    if (!(await this.storage.r2Config())) return ok({ mode: 'multipart' });
+
+    const { token, exp } = signUpload({
+      lesson: String(lesson.id),
+      user: String(user.id),
+      filename,
+      size: Number(data.size),
+      type: data.content_type as string,
+    });
+    return ok({
+      mode: 'stream',
+      upload_url: `${apiOrigin()}/api/v1/content/lessons/${lesson.id}/video-upload/stream?t=${token}`,
+      expires_at: new Date(exp * 1000).toISOString(),
+    });
+  }
+
+  /**
+   * not in legacy: the raw file, no Bearer (the signed `t` authorises it; see
+   * client-ip.ts). Streams into storage, then replaces the lesson's video as
+   * a multipart upload does. The body is never buffered whole: the video
+   * content type is not parsed by Nest's JSON/urlencoded parsers.
+   */
+  @Public()
+  @Roles()
+  @Put('lessons/:lesson/video-upload/stream')
+  @HttpCode(200)
+  async videoUploadStream(
+    @Param('lesson') raw: string,
+    @Query('t') t: string,
+    @Req() req: Request,
+  ) {
+    const grant = verifyUpload(t);
+    if (!grant || grant.lesson !== String(routeId(raw, 'Lesson')))
+      throw new ApiException('The upload link is invalid or has expired.', 403);
+    const user = await this.db.query.users.findFirst({
+      where: eq(usersTable.id, BigInt(grant.user)),
+    });
+    if (!user || user.status !== 'active')
+      throw new ApiException('The upload link is invalid or has expired.', 403);
+    const { chapters: chapter, ...lesson } = await this.lesson(raw);
+    this.content.guardSubject(user, chapter?.subjects ?? null);
+
+    const length = req.headers['content-length'];
+    if (
+      !length ||
+      Number(length) !== grant.size ||
+      grant.size > DIRECT_VIDEO_MAX_BYTES
+    ) {
+      req.resume();
+      throw ValidationFailed.field(
+        'size',
+        'Content-Length must equal the size the upload was started with.',
+      );
+    }
+
+    // First chunk: must look like a video before anything is stored.
+    const chunks = req[Symbol.asyncIterator]();
+    let head = Buffer.alloc(0);
+    let ended = false;
+    while (head.length < 4096 && !ended) {
+      const n = await chunks.next();
+      if (n.done) ended = true;
+      else head = Buffer.concat([head, n.value as Buffer]);
+    }
+    if (!looksLikeVideo(head))
+      throw ValidationFailed.field(
+        'file',
+        'The file is not a permitted video type.',
+      );
+
+    const ext = grant.filename.split('.').pop()!.toLowerCase();
+    const key = this.storage.videoImportKey(
+      `lessons/${lesson.chapter_id}`,
+      grant.filename,
+      ext,
+    );
+    let received = 0;
+    const body = Readable.from(
+      (async function* () {
+        received += head.length;
+        yield head;
+        while (!ended) {
+          const n = await chunks.next();
+          if (n.done) return;
+          received += (n.value as Buffer).length;
+          yield n.value as Buffer;
+        }
+      })(),
+      { objectMode: false },
+    );
+    try {
+      await this.storage.putPrivateStream(key, body, grant.type);
+      if (received !== grant.size)
+        throw ValidationFailed.field(
+          'size',
+          'The file size does not match the size the upload was started with.',
+        );
+    } catch (e) {
+      await this.storage.deletePrivate(key);
+      throw e;
+    }
+
+    await this.storage.delete(lesson.content_url);
+    await this.videoJobs.deleteHls(lesson.video_hls_path);
+    await this.dropUpload(lesson);
+    await this.db
+      .update(lessonsTable)
+      .set({
+        ...NO_VIDEO,
+        content_url: null,
+        video_status: 'processing',
+        video_upload_key: key,
+        updated_at: new Date(),
+      })
+      .where(eq(lessonsTable.id, lesson.id));
+    await this.videoJobs.startTranscode(lesson.id, key);
+    return this.lessonShow(user, raw);
   }
 
   @Get('lessons/:lesson')

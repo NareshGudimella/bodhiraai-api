@@ -21,7 +21,9 @@ async function bootstrap() {
   assertFileUrlConfig();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   configureApp(app);
-  await app.listen(Number(process.env.PORT ?? 4000));
+  const server = await app.listen(Number(process.env.PORT ?? 4000));
+  // Node's default 5-minute request timeout would cut a 5 GB video upload short.
+  server.requestTimeout = 3_600_000;
 }
 
 // not in legacy: one build, two roles. APP_TYPE=WEB (default) serves the HTTP API
