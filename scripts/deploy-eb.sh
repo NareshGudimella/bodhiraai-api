@@ -23,6 +23,13 @@ if [ "$FOUND" != "$ENV_NAME" ]; then
   echo "::error::No Beanstalk environment $ENV_NAME in application $APP (region ${AWS_REGION:-default}). What exists there (application, environment, status):"
   aws elasticbeanstalk describe-environments --no-include-deleted \
     --query 'Environments[].[ApplicationName,EnvironmentName,Status]' --output text
+  # Beanstalk hides what the caller may not see instead of refusing, so say who we are.
+  echo "== Signed in as"
+  aws sts get-caller-identity --query Arn --output text
+  echo "== Applications visible"
+  aws elasticbeanstalk describe-applications --query 'Applications[].ApplicationName' --output text
+  echo "== Environments visible (raw, terminated included)"
+  aws elasticbeanstalk describe-environments --query 'Environments[].[ApplicationName,EnvironmentName,Status,Health]' --output text
   exit 1
 fi
 
