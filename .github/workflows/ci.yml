@@ -13,6 +13,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # The video-transcode tests run real ffmpeg (as the worker host does).
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
       - run: npm ci
       - run: npx eslint "{src,apps,libs,test}/**/*.ts"
       - run: npx tsc --noEmit -p tsconfig.json
