@@ -10,7 +10,6 @@ import { SettingsService } from './settings.service';
 import { SiteController } from './site.controller';
 import { SiteImagesController } from './site-images.controller';
 import { SiteImagesService } from './site-images.service';
-import { VideoController } from './video.controller';
 
 @Module({
   controllers: [
@@ -22,7 +21,6 @@ import { VideoController } from './video.controller';
     LeadsController,
     SiteController,
     SiteImagesController,
-    VideoController,
   ],
   providers: [AuditService, SettingsService, SiteImagesService],
   exports: [AuditService, SettingsService],

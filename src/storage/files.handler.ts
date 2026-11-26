@@ -18,6 +18,8 @@ const TYPES: Record<string, string> = {
   mov: 'video/quicktime',
   webm: 'video/webm',
   mkv: 'video/x-matroska',
+  ts: 'video/mp2t',
+  m3u8: 'application/vnd.apple.mpegurl',
   txt: 'text/plain; charset=utf-8',
   zip: 'application/zip',
   doc: 'application/msword',

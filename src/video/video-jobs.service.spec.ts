@@ -1,155 +1,251 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { UnrecoverableError } from 'bullmq';
 import type { Db } from '../db/db';
 import type { JobsService } from '../jobs/jobs.service';
-import type { StorageService } from '../storage/storage.service';
-import type { VdoCipherClient } from './vdocipher.client';
+import { decryptSecret } from '../mail/mail-crypto';
+import { StorageService } from '../storage/storage.service';
 import { VideoJobs } from './video-jobs.service';
 
-const KEY = 'video-imports/lessons/1/clip-abcdefgh.webm';
-const VIDEO = 'a'.repeat(32);
+const KEY = 'video-imports/lessons/1/clip-abcdefgh.mp4';
 
-/** Fakes: the lesson row, VdoCipher (import id, status), storage; records writes. */
-function setup(lesson: Record<string, unknown> | undefined, status = 'ready') {
+/** Fakes the lesson row and records writes; real local storage and real ffmpeg. */
+function setup(lesson: Record<string, unknown> | undefined) {
   const sets: Record<string, unknown>[] = [];
-  const update = () => ({
-    set: (v: Record<string, unknown>) => {
-      sets.push(v);
-      if (lesson) Object.assign(lesson, v);
-      const done = Promise.resolve(undefined);
-      return {
-        where: () =>
-          Object.assign(done, {
-            returning: () => Promise.resolve(lesson ? [{ id: 1n }] : []),
-          }),
-      };
-    },
-  });
   const db = {
     query: {
       lessons: { findFirst: () => Promise.resolve(lesson && { ...lesson }) },
     },
-    update,
-    select: () => ({
-      from: () => ({
-        where: () =>
-          Promise.resolve(lesson ? [{ video_id: lesson.video_id }] : []),
-      }),
+    update: () => ({
+      set: (v: Record<string, unknown>) => {
+        sets.push(v);
+        if (lesson) Object.assign(lesson, v);
+        const done = Promise.resolve(undefined);
+        return {
+          where: () =>
+            Object.assign(done, {
+              returning: () => Promise.resolve(lesson ? [{ id: 1n }] : []),
+            }),
+        };
+      },
     }),
   } as unknown as Db;
-  const vdo = {
-    configured: () => true,
-    importUrl: jest.fn().mockResolvedValue(VIDEO),
-    status: jest.fn().mockResolvedValue(status),
-    delete: jest.fn(),
-    deleteBestEffort: jest.fn(),
-  };
-  const storage = {
-    presignPrivate: jest.fn().mockResolvedValue('https://r2.example/presigned'),
-    deletePrivate: jest.fn(),
-  };
-  const jobs = {
-    handle: jest.fn(),
-    ready: true,
-    run: jest.fn().mockResolvedValue(undefined),
-    enqueue: jest.fn().mockResolvedValue(true),
-  };
-  const svc = new VideoJobs(
-    db,
-    storage as unknown as StorageService,
-    vdo as unknown as VdoCipherClient,
-    jobs as unknown as JobsService,
-  );
+  const jobs = { handle: jest.fn(), run: jest.fn() };
+  const storage = new StorageService({} as never);
+  const svc = new VideoJobs(db, storage, jobs as unknown as JobsService);
   jest.spyOn(svc['logger'], 'warn').mockImplementation(() => undefined);
-  return { svc, sets, vdo, storage, jobs };
+  return { svc, sets, storage };
 }
 
 const processing = () => ({
-  title: 'Cells',
-  video_id: null as string | null,
   video_status: 'processing' as string | null,
   video_upload_key: KEY as string | null,
+  video_hls_path: null as string | null,
 });
 
-describe('VideoJobs (video-import job)', () => {
-  it('imports from a presigned link, then finishes once VdoCipher reports ready', async () => {
-    const lesson = processing();
-    const { svc, vdo, storage, sets } = setup(lesson);
-    await svc.importVideo(1n, KEY, false);
-    expect(storage.presignPrivate).toHaveBeenCalledWith(KEY, 12 * 3600);
-    expect(vdo.importUrl).toHaveBeenCalledWith(
-      'https://r2.example/presigned',
-      'Cells',
-    );
-    expect(sets).toEqual([
-      { video_id: VIDEO },
-      { video_status: null, video_upload_key: null },
+describe('VideoJobs (video-transcode job, real ffmpeg)', () => {
+  let dir: string;
+  const env: Record<string, string | undefined> = {};
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'hls-spec-'));
+    for (const k of ['STORAGE_DRIVER', 'LOCAL_PRIVATE_DIR'])
+      env[k] = process.env[k];
+    process.env.STORAGE_DRIVER = 'local';
+    process.env.LOCAL_PRIVATE_DIR = join(dir, 'private');
+    // 3 s test clip, 1280x720 with audio
+    execFileSync('ffmpeg', [
+      '-y',
+      '-loglevel',
+      'error',
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc=size=1280x720:rate=25:duration=3',
+      '-f',
+      'lavfi',
+      '-i',
+      'sine=frequency=440:duration=3',
+      '-c:v',
+      'libx264',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-shortest',
+      join(dir, 'clip.mp4'),
     ]);
-    expect(storage.deletePrivate).toHaveBeenCalledWith(KEY);
+  }, 60_000);
+  afterAll(async () => {
+    for (const [k, v] of Object.entries(env))
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    await rm(dir, { recursive: true, force: true });
   });
 
-  it('retries while VdoCipher is still processing, without importing twice', async () => {
+  const putOriginal = async (storage: StorageService) =>
+    storage.putPrivate(KEY, await readFile(join(dir, 'clip.mp4')), 'video/mp4');
+
+  it('makes encrypted HLS, stores the encrypted key and deletes the original', async () => {
     const lesson = processing();
-    const { svc, vdo, storage } = setup(lesson, 'Queued');
-    await expect(svc.importVideo(1n, KEY, false)).rejects.toThrow(
-      'not ready yet (queued)',
+    const { svc, sets, storage } = setup(lesson);
+    await putOriginal(storage);
+    await svc.transcode(1n, KEY, true);
+
+    const set = sets[0];
+    const prefix = set.video_hls_path as string;
+    expect(prefix).toMatch(/^hls\/1\/[0-9a-f]{16}\/$/);
+    expect(set).toMatchObject({ video_status: null, video_upload_key: null });
+    const key = Buffer.from(
+      decryptSecret(set.video_hls_key as string),
+      'base64',
     );
-    await expect(svc.importVideo(1n, KEY, false)).rejects.toThrow('not ready');
-    expect(vdo.importUrl).toHaveBeenCalledTimes(1);
-    expect(lesson.video_status).toBe('processing');
-    expect(storage.deletePrivate).not.toHaveBeenCalled();
+    expect(key).toHaveLength(16);
+
+    const root = join(StorageService.privateDir(), prefix);
+    const names = await readdir(root);
+    expect(names).toEqual(
+      expect.arrayContaining(['master.m3u8', '360p.m3u8', '720p.m3u8']),
+    );
+    const master = await readFile(join(root, 'master.m3u8'), 'utf8');
+    expect(master).toContain('RESOLUTION=1280x720');
+    expect(master).toContain('RESOLUTION=640x360');
+    for (const r of ['360p', '720p']) {
+      const pl = await readFile(join(root, `${r}.m3u8`), 'utf8');
+      expect(pl).toMatch(
+        /#EXT-X-KEY:METHOD=AES-128,URI="key",IV=0x[0-9a-f]{32}/,
+      );
+      expect(pl).toContain('#EXT-X-PLAYLIST-TYPE:VOD');
+      expect(pl).toContain('#EXT-X-ENDLIST');
+    }
+    // Segments are ciphertext: not playable without the key.
+    const seg = names.find((n) => n.startsWith('720p_') && n.endsWith('.ts'))!;
+    const segPath = join(root, seg);
+    expect((await stat(segPath)).size % 16).toBe(0); // AES-CBC blocks
+    const probe = (file: string) =>
+      execFileSync(
+        'ffprobe',
+        [
+          '-v',
+          'error',
+          '-show_entries',
+          'stream=codec_type',
+          '-of',
+          'csv=p=0',
+          file,
+        ],
+        {
+          stdio: ['ignore', 'pipe', 'ignore'],
+        },
+      ).toString();
+    expect(() => probe(segPath)).toThrow();
+    expect((await readFile(segPath))[0]).not.toBe(0x47); // MPEG-TS sync byte
+
+    // The original is gone.
+    expect(await storage.getPrivate(KEY)).toBeNull();
+  }, 120_000);
+
+  it('gives up on garbage: failed status, original deleted, nothing left under hls/', async () => {
+    const lesson = processing();
+    const { svc, sets, storage } = setup(lesson);
+    await storage.putPrivate(KEY, Buffer.from('not a video'), 'video/mp4');
+    await expect(svc.transcode(1n, KEY, true)).rejects.toThrow();
+    expect(sets).toEqual([{ video_status: 'failed', video_upload_key: null }]);
+    expect(await storage.getPrivate(KEY)).toBeNull();
+  }, 30_000);
+
+  it('keeps the status on a non-final failure so the job can retry', async () => {
+    const { svc, sets } = setup(processing()); // original missing from storage
+    await expect(svc.transcode(1n, KEY, false)).rejects.toThrow('missing');
+    expect(sets).toEqual([]);
   });
 
-  it('marks the lesson failed on the last attempt, deleting the import and the file', async () => {
-    const lesson = processing();
-    const { svc, jobs, storage } = setup(lesson, 'Queued');
-    await expect(svc.importVideo(1n, KEY, true)).rejects.toThrow('not ready');
-    expect(lesson).toEqual(
-      expect.objectContaining({
-        video_status: 'failed',
-        video_id: null,
-        video_upload_key: null,
-      }),
-    );
-    expect(jobs.run).toHaveBeenCalledWith(
-      'video-delete',
-      { video: VIDEO },
-      expect.objectContaining({ jobId: `video-delete-${VIDEO}` }),
-    );
-    expect(storage.deletePrivate).toHaveBeenCalledWith(KEY);
-  });
-
-  it('gives up at once when VdoCipher reports an error', async () => {
-    const lesson = processing();
-    const { svc } = setup(lesson, 'Error');
-    await expect(svc.importVideo(1n, KEY, false)).rejects.toBeInstanceOf(
+  it('fails an unreadable file at once, without retries', async () => {
+    const { svc, sets, storage } = setup(processing());
+    await storage.putPrivate(KEY, Buffer.from('not a video'), 'video/mp4');
+    await expect(svc.transcode(1n, KEY, false)).rejects.toBeInstanceOf(
       UnrecoverableError,
     );
-    expect(lesson.video_status).toBe('failed');
+    expect(sets).toEqual([{ video_status: 'failed', video_upload_key: null }]);
+  }, 30_000);
+
+  it('only deletes the original when the lesson moved on', async () => {
+    const { svc, sets, storage } = setup({
+      ...processing(),
+      video_upload_key: 'other',
+    });
+    await putOriginal(storage);
+    await svc.transcode(1n, KEY, true);
+    expect(sets).toEqual([]);
+    expect(await storage.getPrivate(KEY)).toBeNull();
   });
 
-  it('only drops the file when the lesson was replaced or deleted meanwhile', async () => {
-    for (const lesson of [
-      undefined,
-      { ...processing(), video_upload_key: 'other' },
-    ]) {
-      const { svc, vdo, storage, sets } = setup(lesson);
-      await svc.importVideo(1n, KEY, false);
-      expect(vdo.importUrl).not.toHaveBeenCalled();
-      expect(sets).toEqual([]);
-      expect(storage.deletePrivate).toHaveBeenCalledWith(KEY);
-    }
+  it('deletePrivatePrefix refuses a prefix outside hls/<id>/<version>/', async () => {
+    const { storage } = setup(undefined);
+    await expect(storage.deletePrivatePrefix('')).rejects.toThrow();
+    await expect(storage.deletePrivatePrefix('hls/')).rejects.toThrow();
+    await expect(storage.deletePrivatePrefix('invoices/')).rejects.toThrow();
   });
+});
 
-  it('marks the lesson failed when the job cannot be queued', async () => {
-    const lesson = processing();
-    const { svc, jobs } = setup(lesson);
-    jobs.enqueue.mockResolvedValue(false);
-    await svc.startImport(1n, KEY);
-    expect(jobs.enqueue).toHaveBeenCalledWith(
-      'video-import',
-      { lesson: '1', key: KEY },
-      expect.stringMatching(/^video-import-1-[a-f0-9]{16}$/),
+describe('VideoJobs: FFmpeg only on the worker (not in legacy)', () => {
+  const make = (rows: { id: bigint; video_upload_key: string }[] = []) => {
+    const db = {
+      query: { lessons: { findMany: () => Promise.resolve(rows) } },
+    } as unknown as Db;
+    const jobs = {
+      handle: jest.fn(),
+      run: jest.fn().mockResolvedValue(undefined),
+      enqueue: jest.fn().mockResolvedValue(false),
+    };
+    const svc = new VideoJobs(
+      db,
+      {} as StorageService,
+      jobs as unknown as JobsService,
     );
-    expect(lesson.video_status).toBe('failed');
+    jest.spyOn(svc['logger'], 'warn').mockImplementation(() => undefined);
+    return { svc, jobs };
+  };
+  const nodeEnv = process.env.NODE_ENV;
+  afterEach(() => {
+    process.env.NODE_ENV = nodeEnv;
+  });
+
+  it('production web API only queues the transcode, never runs it inline', async () => {
+    process.env.NODE_ENV = 'production';
+    const { svc, jobs } = make();
+    await svc.startTranscode(7n, KEY); // enqueue fails (Redis down)
+    expect(jobs.enqueue).toHaveBeenCalledWith(
+      'video-transcode',
+      { lesson: '7', key: KEY },
+      expect.stringMatching(/^video-transcode-7-[0-9a-f]{16}$/),
+    );
+    expect(jobs.run).not.toHaveBeenCalled();
+  });
+
+  it('outside production it may run inline (development without Redis)', async () => {
+    process.env.NODE_ENV = 'development';
+    const { svc, jobs } = make();
+    await svc.startTranscode(7n, KEY);
+    expect(jobs.run).toHaveBeenCalledWith(
+      'video-transcode',
+      { lesson: '7', key: KEY },
+      expect.objectContaining({ inline: 'background' }),
+    );
+  });
+
+  it('the worker sweep queues every upload still processing, with the same job id', async () => {
+    const { svc, jobs } = make([
+      { id: 7n, video_upload_key: KEY },
+      { id: 8n, video_upload_key: 'video-imports/lessons/2/b.mp4' },
+    ]);
+    jobs.enqueue.mockResolvedValue(true);
+    await svc.startTranscode(7n, KEY).catch(() => undefined);
+    expect(await svc.sweep()).toBe(2);
+    const ids = jobs.enqueue.mock.calls.map((c) => c[2] as string);
+    expect(
+      new Set(ids.filter((id) => id.startsWith('video-transcode-7-'))).size,
+    ).toBe(1);
   });
 });

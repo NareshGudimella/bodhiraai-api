@@ -1,8 +1,6 @@
 process.env.TZ = 'UTC';
 
 import { randomBytes } from 'node:crypto';
-import { createServer, type IncomingMessage, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { Test } from '@nestjs/testing';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
@@ -24,29 +22,24 @@ import {
   users,
 } from '../src/db/schema';
 import type { schools as School, users as User } from '../src/db/types';
-import { stubIntegrations } from './integrations';
 
 loadEnv();
 
 const tag = randomBytes(3).toString('hex');
-const VDO_SECRET = `stub-${tag}`;
-const hex32 = () => randomBytes(16).toString('hex');
 const USER_MORPH = 'App\\Models\\User';
 
 /**
  * not in legacy: Bodhira Direct, the default school (2026-11-01). Self sign-up
  * students join it and keep the individual (B2C) rules; its guards; school
  * admins' read-only subjects, `GET /admin/content` and lesson playback.
- * VdoCipher is a local stub. Creates its own schools, syllabi, content and
+ * Creates its own schools, syllabi, content and
  * users (removed afterwards); Bodhira Direct comes from migration 0007.
  */
 describe('Bodhira Direct and school content (e2e)', () => {
   let app: NestExpressApplication;
   let db: Db;
   let tokens: TokenService;
-  let stub: Server;
   let direct: School;
-  const otpBodies: string[] = [];
   const envBefore: Record<string, string | undefined> = {};
   const createdUsers: bigint[] = [];
   const createdSchools: bigint[] = [];
@@ -57,11 +50,6 @@ describe('Bodhira Direct and school content (e2e)', () => {
   const u: Record<string, User> = {};
   const as = (who: string) => ({ Authorization: `Bearer ${t[who]}` });
 
-  const setEnv = (name: string, value: string | undefined) => {
-    if (!(name in envBefore)) envBefore[name] = process.env[name];
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
-  };
   const now = new Date();
   const stamps = { created_at: now, updated_at: now };
 
@@ -152,7 +140,7 @@ describe('Bodhira Direct and school content (e2e)', () => {
         title: `${name} video`,
         slug: `${name.toLowerCase()}-v-${tag}`,
         type: 'video',
-        video_id: hex32(),
+        video_hls_path: `hls/0/${tag}/`,
         duration_sec: 90,
         ...stamps,
       })
@@ -164,7 +152,7 @@ describe('Bodhira Direct and school content (e2e)', () => {
         title: `${name} draft`,
         slug: `${name.toLowerCase()}-d-${tag}`,
         type: 'video',
-        video_id: hex32(),
+        video_hls_path: `hls/0/${tag}/`,
         is_published: false,
         ...stamps,
       })
@@ -191,24 +179,6 @@ describe('Bodhira Direct and school content (e2e)', () => {
   let schoolB: School;
 
   beforeAll(async () => {
-    stub = createServer((req: IncomingMessage, res) => {
-      const chunks: Buffer[] = [];
-      req.on('data', (c: Buffer) => chunks.push(c));
-      req.on('end', () => {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        if (/^\/videos\/[a-f0-9]{32}\/otp$/.test(req.url ?? '')) {
-          otpBodies.push(Buffer.concat(chunks).toString('utf8'));
-          return res.end(JSON.stringify({ otp: 'otp', playbackInfo: 'pbi' }));
-        }
-        res.end('{}');
-      });
-    });
-    await new Promise<void>((r) => stub.listen(0, '127.0.0.1', r));
-    setEnv(
-      'VDOCIPHER_API_BASE',
-      `http://127.0.0.1:${(stub.address() as AddressInfo).port}`,
-    );
-
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -216,7 +186,6 @@ describe('Bodhira Direct and school content (e2e)', () => {
       moduleRef.createNestApplication<NestExpressApplication>(),
     );
     await app.init();
-    stubIntegrations(app).set('vdocipher', { api_secret: VDO_SECRET });
     db = app.get<Db>(DB);
     tokens = app.get(TokenService);
 
@@ -296,7 +265,6 @@ describe('Bodhira Direct and school content (e2e)', () => {
         await db.delete(syllabi).where(inArray(syllabi.id, createdSyllabi));
     }
     await app?.close();
-    await new Promise((r) => stub?.close(r));
   });
 
   /** Signed-in user for a token created by the API (sign-up). */
@@ -633,7 +601,7 @@ describe('Bodhira Direct and school content (e2e)', () => {
                     title: subX.video.title,
                     type: 'video',
                     duration_sec: 90,
-                    playback: 'vdocipher',
+                    playback: 'hls',
                     thumbnail: null,
                   },
                 ],
@@ -672,16 +640,12 @@ describe('Bodhira Direct and school content (e2e)', () => {
     });
 
     it('lets an admin play lessons of a used curriculum, watermarked', async () => {
-      otpBodies.length = 0;
       const res = await http()
         .get(`/api/v1/lessons/${subX.video.id}/playback`)
         .set(as('adminA'))
         .expect(200);
-      expect(res.body.data.provider).toBe('vdocipher');
-      const annotate = JSON.parse(
-        (JSON.parse(otpBodies[0]) as { annotate: string }).annotate,
-      ) as { text: string }[];
-      expect(annotate[0].text).toBe(`${u.adminA.name} · ${u.adminA.email}`);
+      expect(res.body.data.type).toBe('hls');
+      expect(res.body.data.watermark).toBe(u.adminA.email);
       await http()
         .get(`/api/v1/lessons/${own.video.id}/playback`)
         .set(as('adminA'))

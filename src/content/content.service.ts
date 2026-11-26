@@ -163,9 +163,10 @@ export class ContentService {
         type: (data.type as string | undefined) ?? 'video',
         thumbnail: str('thumbnail'),
         content_url: str('content_url'),
-        video_id: str('video_id'), // security: not in legacy (VdoCipher)
-        video_status: str('video_status'), // not in legacy (video-import job)
+        video_status: str('video_status'), // not in legacy (video-transcode job)
         video_upload_key: str('video_upload_key'),
+        video_hls_path: str('video_hls_path'),
+        video_hls_key: str('video_hls_key'),
         content_body: str('content_body'),
         duration_sec: int(data.duration_sec),
         sort_order: int(data.sort_order ?? (top ?? 0) + 1),
@@ -186,9 +187,10 @@ export class ContentService {
       type: data.type ?? lesson.type,
       thumbnail: keep('thumbnail'),
       content_url: keep('content_url'),
-      video_id: keep('video_id'), // security: not in legacy (VdoCipher)
-      video_status: keep('video_status'), // not in legacy (video-import job)
+      video_status: keep('video_status'), // not in legacy (video-transcode job)
       video_upload_key: keep('video_upload_key'),
+      video_hls_path: keep('video_hls_path'),
+      video_hls_key: keep('video_hls_key'),
       content_body: keep('content_body'),
       duration_sec: int(data.duration_sec ?? lesson.duration_sec),
       sort_order: int(data.sort_order ?? lesson.sort_order),

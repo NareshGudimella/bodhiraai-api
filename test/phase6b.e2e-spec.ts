@@ -119,11 +119,8 @@ describe('Marketing site (e2e)', () => {
     if (draft) await get(`/site/blog/${draft.slug}`).expect(404);
   });
 
-  it('validates the video id before calling VdoCipher', async () => {
-    const bad = await request(app.getHttpServer())
-      .get('/api/v1/video/otp?video=nope')
-      .expect(422);
-    expect(bad.body).toEqual({ error: 'invalid_video_id' });
+  it('no longer serves the VdoCipher OTP route', async () => {
+    await request(app.getHttpServer()).get('/api/v1/video/otp').expect(404);
   });
 
   it('opens the image manager to CMS roles, with the folder browser for super admins only', async () => {

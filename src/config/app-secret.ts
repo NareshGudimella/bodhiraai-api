@@ -7,12 +7,13 @@ import { hkdfSync } from 'node:crypto';
  * `bodhira:<purpose>`), so no derived value reveals another or APP_SECRET:
  * - `settings`: AES-256-GCM key for the secrets saved in the admin panel;
  * - `file-urls`: HMAC key of signed private-file links (the edge Worker checks them);
- * - `proxy`: the X-Proxy-Secret the edge Worker and web server send.
+ * - `proxy`: the X-Proxy-Secret the edge Worker and web server send;
+ * - `video`: HMAC key of the lesson-video (HLS) playback tokens (API only).
  * The web app derives `proxy` and `file-urls` the same way (bodhiraai-ui
  * worker/app-secret.ts, src/lib/proxy-secret.ts). Changing APP_SECRET changes all
- * three: set it everywhere at once and re-enter the panel's secrets.
+ * of them: set it everywhere at once and re-enter the panel's secrets.
  */
-export type KeyPurpose = 'settings' | 'file-urls' | 'proxy';
+export type KeyPurpose = 'settings' | 'file-urls' | 'proxy' | 'video';
 
 type Env = Record<string, string | undefined>;
 

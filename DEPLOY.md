@@ -16,7 +16,7 @@ How the API fits with Cloudflare and the switch from legacy are in [../docs/cuto
 |---|---|---|
 | Elastic Beanstalk | Node.js 22 platform on Amazon Linux 2023. Application Load Balancer; auto scaling 1–10 on CPU | Config is in `.ebextensions/` and `.platform/`. Each instance runs `node dist/main.js` (`Procfile`) behind Beanstalk's Nginx, on port 8080 |
 | Supabase | PostgreSQL 17 (Pro plan recommended for daily backups and point-in-time recovery). The app connects through the **transaction pooler** (port 6543); migrations use the **session pooler** (port 5432) | Pick a region close to the Beanstalk region. Use the pooler host, not `db.<ref>.supabase.co`, which is IPv6-only |
-| Worker host (EC2) | Amazon Linux 2023, in the Beanstalk VPC: Redis with AOF persistence, and the BullMQ worker (the same build with `APP_TYPE=WORKER`, under PM2) | Section 4. Redis holds the shared rate-limit counters and the job queue. The worker runs the jobs the API enqueues: emails (password reset), invoice PDF and email after payment, notification rows, VdoCipher video imports and deletes. Not in legacy, which did this work inside the request; without `REDIS_URL` the API still does (inline) |
+| Worker host (EC2) | Amazon Linux 2023, in the Beanstalk VPC: Redis with AOF persistence, and the BullMQ worker (the same build with `APP_TYPE=WORKER`, under PM2) | Section 4. Redis holds the shared rate-limit counters and the job queue. The worker runs the jobs the API enqueues: emails (password reset), invoice PDF and email after payment, notification rows, lesson-video transcoding to encrypted HLS (needs `ffmpeg`, below) and HLS deletes. Not in legacy, which did this work inside the request; without `REDIS_URL` the API still does (inline) |
 | Cloudflare | DNS, plus the edge Worker in front of everything | The Worker passes `/api/v1/*` and `/webhooks/*` to `https://api.bodhiraai.com`, a proxied record pointing at the load balancer |
 
 ## 2. Network and security groups
@@ -54,6 +54,18 @@ TLS:
 
 One small EC2 instance (e.g. `t4g.small`, Amazon Linux 2023, 20 GB gp3) in a private subnet of the Beanstalk VPC, with its own security group (section 2).
 
+**ffmpeg** (lesson videos, **this host only**; Beanstalk never transcodes): the `video-transcode` job runs `ffmpeg` and `ffprobe` from PATH on this host and turns each uploaded lesson video into AES-128 encrypted HLS (360p and 720p). Install it:
+
+```bash
+sudo dnf install -y ffmpeg        # if the AL2023 repos have no ffmpeg: use a static build below
+ffmpeg -version && ffprobe -version
+# Static build fallback (arm64 for t4g; pick the build and verify its checksum from the vendor's page):
+#   curl -LO https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz
+#   tar xf ffmpeg-release-arm64-static.tar.xz && sudo cp ffmpeg-*-static/{ffmpeg,ffprobe} /usr/local/bin/
+```
+
+CPU sizing: transcoding is CPU-bound. A `t4g.small` (2 vCPU, burstable) makes a 10-minute 1080p lesson in roughly real time or slower (x264 `veryfast`, both renditions one after the other) and runs out of CPU credits under a steady stream of uploads: it is fine for occasional uploads. For regular use pick `c7g.large` or bigger, and set `WORKER_CONCURRENCY=1` (or 2) so one transcode does not starve the other jobs. The original is read into memory and a temp dir (in `/tmp`, removed afterwards) holds about twice its size: keep the 20 GB disk free. These sizing figures are estimates, not measured on that instance.
+
 **Redis** (jobs must survive a restart, so AOF persistence is on):
 
 ```bash
@@ -75,7 +87,7 @@ redis6-cli -a '<strong-password>' --no-auth-warning config get appendonly   # �
 
 - `REDIS_URL` is `redis://:<password>@<private-ip>:6379` on Beanstalk and `redis://:<password>@127.0.0.1:6379` on the worker. Use a password without `@`, `:` or `/` (`openssl rand -hex 32`). shortcut: plain TCP inside the VPC (no TLS); upgrade with Redis TLS (`tls-port`) and `rediss://` if the network can't be trusted.
 - **Backups:** the AOF file is in `/var/lib/redis6`. Take daily EBS snapshots of the volume (Data Lifecycle Manager); a lost Redis loses queued jobs and resets rate-limit counters, nothing else.
-- **If Redis is down:** rate limits are counted per instance in memory (logged at most once a minute), and jobs run inline in the API instance that wanted them (emails, invoices, notifications, video deletes, as before). Video uploads go straight to VdoCipher (the old synchronous upload). Nothing fails; deep `/health` answers 503 `degraded`.
+- **If Redis is down:** rate limits are counted per instance in memory (logged at most once a minute), and jobs run inline in the API instance that wanted them (emails, invoices, notifications, video deletes, as before). Lesson videos are **not** transcoded there (no ffmpeg on Beanstalk): the lesson stays `processing` with its original kept, and the worker's sweep (at start and every 5 minutes) queues it once Redis is back. Nothing fails; deep `/health` answers 503 `degraded`.
 
 **The worker** runs under PM2 as the deploy user, from the release directory of the current deploy (section 6), with `ecosystem.worker.config.js`. The web API is not here: it runs on Elastic Beanstalk.
 
@@ -104,7 +116,7 @@ The first `scripts/deploy.sh` starts the worker and `pm2 save`s it, so it comes 
 
 `NODE_ENV` and `PORT=8080` come from `.ebextensions/01-bodhira.config`. Set the rest on the environment, never in files.
 
-**Secrets** (`DATABASE_URL`, `APP_SECRET`, `REDIS_URL`): keep them in Secrets Manager or Parameter Store, and reference them from the environment. Provider secrets (R2, VdoCipher, SMTP password, gateway and Anthropic keys) are not environment variables: the panel saves them encrypted in the database (step 6). Beanstalk's `aws:elasticbeanstalk:application:environmentsecrets` namespace does this; check the current Beanstalk docs before relying on it. Plain environment properties (`eb setenv`) are visible to anyone with console access, so use them only for non-secret values.
+**Secrets** (`DATABASE_URL`, `APP_SECRET`, `REDIS_URL`): keep them in Secrets Manager or Parameter Store, and reference them from the environment. Provider secrets (R2, SMTP password, gateway and Anthropic keys) are not environment variables: the panel saves them encrypted in the database (step 6). Beanstalk's `aws:elasticbeanstalk:application:environmentsecrets` namespace does this; check the current Beanstalk docs before relying on it. Plain environment properties (`eb setenv`) are visible to anyone with console access, so use them only for non-secret values.
 
 
 | Variable | Value |
@@ -124,7 +136,7 @@ The first `scripts/deploy.sh` starts the worker and `pm2 save`s it, so it comes 
 | `APP_NAME`, `APP_ENV` | Copy the legacy values |
 | `files:make-private` flags | Cut-over only, not environment variables: `npm run files:make-private -- --origin https://bodhiraai.com` (the legacy site origin, so absolute legacy URLs are recognised). The legacy bucket (default `bodhira-legacy`) is the panel's Storage → `legacy_bucket` |
 | `WORKER_CONCURRENCY` | Worker host only, optional: jobs run at once (default `5`) |
-| Test-only knobs: `R2_ENDPOINT`, `VDOCIPHER_API_BASE`, `MSG91_API_BASE`, `ANTHROPIC_BASE_URL` | Leave unset in production (tests point them at local stubs). VdoCipher's secret and ids are in the panel (Integrations → VdoCipher), see step 6 |
+| Test-only knobs: `R2_ENDPOINT`, `MSG91_API_BASE`, `ANTHROPIC_BASE_URL` | Leave unset in production (tests point them at local stubs). |
 
 **Trade-off:** the Cloudflare Worker and the web host now hold `APP_SECRET`, and that key also decrypts the panel's saved provider secrets. That matters only together with database access.
 
@@ -144,7 +156,7 @@ MIGRATE_DATABASE_URL='<session pooler URL>' WORKER_HOST=<ssh host of the worker>
 5. `eb deploy`, rolling one instance at a time with a temporary extra one, labelled with the commit. Then a ping through Cloudflare.
 6. **Configure integrations in the panel** (Super Admin → Integrations and Mail settings). Providers are read only from the panel, so each stays off until saved. On the **first deploy**, copy the legacy values in before step 4, since the worker needs the providers too. `npm run settings:import-env` is a dry run that prints what it would save; `npm run settings:import-env -- --apply` saves. Run it with the production `DATABASE_URL` and `APP_SECRET`, and with the legacy values still in the environment. It skips any provider already saved in the panel, and it saves SMS disabled, so enable SMS there. Or fill in the panel by hand. Then check that each provider shows as configured:
    - Storage: account, keys, buckets and public URL. `private_bucket` (no public domain) holds invoices and private uploads; bind the same bucket to the Worker as `PRIVATE_FILES`.
-   - VdoCipher: `api_secret` is **required for lesson videos**. Without it, production refuses lesson uploads (503) and playback OTPs (503).
+   - Lesson videos need no provider: they are transcoded by the worker (`ffmpeg`, section 4) and stored in the private R2 bucket.
    - Payments: gateway and keys. **Webhooks need the payment webhook secrets in the panel** (`razorpay_webhook_secret` or `stripe_webhook_secret`); without them the webhook answers a generic 400.
 
    Then remove the moved variables from the Beanstalk environment and the worker file, and send a test webhook from the gateway dashboard.

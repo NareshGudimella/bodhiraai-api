@@ -33,7 +33,6 @@ import {
 import { Msg91Client } from '../integrations/msg91.client';
 import { MailKeyError } from '../mail/mail-crypto';
 import { StorageService } from '../storage/storage.service';
-import { VdoCipherClient } from '../video/vdocipher.client';
 
 const provider = (raw: string): Provider => {
   if (!isProvider(raw)) throw new ApiException('Unknown integration.', 404);
@@ -42,7 +41,7 @@ const provider = (raw: string): Provider => {
 
 /**
  * not in legacy: /api/v1/super/integrations. Provider settings (R2 storage,
- * MSG91 SMS, payment gateways, the AI tutor, VdoCipher) edited by super admins;
+ * MSG91 SMS, payment gateways, the AI tutor) edited by super admins;
  * the API reads them from here instead of the environment. Secrets are
  * write-only: an Item carries `secrets: {field: isSet}`, a blank secret on
  * save keeps the stored one, DELETE …/secrets/:field clears one. Every change
@@ -58,7 +57,6 @@ export class IntegrationsController {
     private readonly storage: StorageService,
     private readonly sms: Msg91Client,
     private readonly claude: ClaudeClient,
-    private readonly vdo: VdoCipherClient,
     @Inject(DB) private readonly db: Db,
   ) {}
 
@@ -201,9 +199,6 @@ export class IntegrationsController {
         return `Keys accepted: ${(await testGatewayKeys(await this.settings.get('payments'))).join(', ')}.`;
       case 'ai':
         return `Anthropic answered (model ${await this.claude.test()}).`;
-      case 'vdocipher':
-        await this.vdo.test();
-        return 'VdoCipher accepted the API secret.';
     }
   }
 }

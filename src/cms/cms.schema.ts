@@ -92,6 +92,12 @@ export const SETTINGS_SCHEMA: Record<
       { key: 'sitemap_enabled', label: 'Enable sitemap.xml', type: 'boolean' },
     ],
   },
+  // Not in legacy: the homepage video (a public MP4 or a YouTube link; none = no play button).
+  home: {
+    label: 'Home page',
+    icon: 'fa-circle-play',
+    fields: [{ key: 'video_url', label: 'Homepage video URL', type: 'text' }],
+  },
   footer: {
     label: 'Footer',
     icon: 'fa-shoe-prints',

@@ -15,7 +15,6 @@ import { DB, type Db } from '../src/db/db';
 import { audit_logs, integration_settings } from '../src/db/schema';
 import { IntegrationSettingsService } from '../src/integrations/integration-settings.service';
 import { StorageService } from '../src/storage/storage.service';
-import { VdoCipherClient } from '../src/video/vdocipher.client';
 
 loadEnv();
 
@@ -29,7 +28,7 @@ interface Call {
  * not in legacy: /super/integrations and the settings store, end to end.
  * Writes the shared `integration_settings` table, so `npm run test:e2e` runs
  * this file on its own after the parallel suites (`*.serial-e2e-spec.ts`).
- * Every provider is a local stub (R2, Anthropic, VdoCipher, MSG91 over HTTP;
+ * Every provider is a local stub (R2, Anthropic, MSG91 over HTTP;
  * Razorpay/Stripe through a fetch spy): nothing reaches a real service.
  * Leaves no integration_settings rows behind.
  */
@@ -108,8 +107,6 @@ describe('Super admin integrations (e2e)', () => {
               usage: { input_tokens: 3, output_tokens: 1 },
             }),
           );
-        if (url.startsWith('/vdo/videos'))
-          return res.end(JSON.stringify({ rows: [], count: 0 }));
         if (url.startsWith('/msg91/otp'))
           return res.end(JSON.stringify({ type: 'success', request_id: 'r' }));
         res.statusCode = 404;
@@ -121,7 +118,6 @@ describe('Super admin integrations (e2e)', () => {
     setEnv('STORAGE_DRIVER', 'r2');
     setEnv('R2_ENDPOINT', `${base}/r2`);
     setEnv('ANTHROPIC_BASE_URL', `${base}/anthropic`);
-    setEnv('VDOCIPHER_API_BASE', `${base}/vdo`);
     setEnv('MSG91_API_BASE', `${base}/msg91`);
     fetchSpy = jest.spyOn(global, 'fetch').mockImplementation((input, init) => {
       const url = String(input instanceof Request ? input.url : input);
@@ -178,7 +174,7 @@ describe('Super admin integrations (e2e)', () => {
   it('GET lists every provider with defaults and no secret values', async () => {
     const res = await http().get(URL).set(sup).expect(200);
     expect(Object.keys(res.body.data).sort()).toEqual(
-      ['ai', 'payments', 'sms', 'storage', 'vdocipher'].sort(),
+      ['ai', 'payments', 'sms', 'storage'].sort(),
     );
     expect(res.body.data.payments).toEqual({
       provider: 'payments',
@@ -240,14 +236,6 @@ describe('Super admin integrations (e2e)', () => {
       .send({ max_tokens: 0, model: 'bad model' })
       .expect(422);
     expect(Object.keys(ai.body.errors).sort()).toEqual(['max_tokens', 'model']);
-    const vdo = await http()
-      .put(`${URL}/vdocipher`)
-      .set(sup)
-      .send({ marketing_video_id: 'xyz', public_video_ids: 'a,b' })
-      .expect(422);
-    expect(Object.keys(vdo.body.errors).sort()).toEqual(
-      ['marketing_video_id', 'public_video_ids'].sort(),
-    );
     expect(await db.select().from(integration_settings)).toHaveLength(0);
   });
 
@@ -326,24 +314,6 @@ describe('Super admin integrations (e2e)', () => {
     expect(fail.body.data.ok).toBe(false);
     expect(fail.body.data.message).toMatch(/private-e2e/);
     expect(JSON.stringify(fail.body)).not.toContain(STORAGE.secret_access_key);
-
-    // VdoCipher: unconfigured fails, configured makes an authenticated GET.
-    const none = await http()
-      .post(`${URL}/vdocipher/test`)
-      .set(sup)
-      .expect(200);
-    expect(none.body.data.ok).toBe(false);
-    await http()
-      .put(`${URL}/vdocipher`)
-      .set(sup)
-      .send({ api_secret: 'vdo-secret-xyz', otp_ttl: 600 })
-      .expect(200);
-    expect(await app.get(VdoCipherClient).configured()).toBe(true);
-    const vdo = await http().post(`${URL}/vdocipher/test`).set(sup).expect(200);
-    expect(vdo.body.data.ok).toBe(true);
-    expect(callsTo('/vdo/videos').pop()!.headers.authorization).toBe(
-      'Apisecret vdo-secret-xyz',
-    );
 
     // AI: a tiny completion with the saved key and model.
     await http()
@@ -438,19 +408,18 @@ describe('Super admin integrations (e2e)', () => {
 
   it('DELETE clears one secret and audits it', async () => {
     const res = await http()
-      .delete(`${URL}/vdocipher/secrets/api_secret`)
+      .delete(`${URL}/ai/secrets/api_key`)
       .set(sup)
       .expect(200);
-    expect(res.body.data.secrets.api_secret).toBe(false);
+    expect(res.body.data.secrets.api_key).toBe(false);
     expect(res.body.data.configured).toBe(false);
-    expect(res.body.data.values.otp_ttl).toBe(600);
-    expect((await row('vdocipher')).secrets).toEqual({});
-    expect(await app.get(VdoCipherClient).configured()).toBe(false);
+    expect(res.body.data.values.max_tokens).toBe(50);
+    expect((await row('ai')).secrets).toEqual({});
     const logs = await db
       .select()
       .from(audit_logs)
       .where(eq(audit_logs.action, 'integration_settings.secret_cleared'));
-    expect(logs.at(-1)?.changes).toContain('api_secret');
+    expect(logs.at(-1)?.changes).toContain('api_key');
   });
 
   it('production refuses to start without APP_SECRET once a secret is stored', async () => {

@@ -1,15 +1,15 @@
 import { Module } from '@nestjs/common';
 import { AdminModule } from '../admin/admin.module';
 import { StudentModule } from '../student/student.module';
+import { HlsController } from './hls.controller';
 import { LessonPlaybackController } from './lesson-playback.controller';
-import { VdoCipherClient } from './vdocipher.client';
 import { VideoJobs } from './video-jobs.service';
 
-/** security: not in legacy. Lesson videos on VdoCipher and the playback endpoint. */
+/** not in legacy. Self-hosted encrypted-HLS lesson videos and the playback endpoints. */
 @Module({
   imports: [StudentModule, AdminModule],
-  controllers: [LessonPlaybackController],
-  providers: [VdoCipherClient, VideoJobs],
-  exports: [VdoCipherClient, VideoJobs],
+  controllers: [LessonPlaybackController, HlsController],
+  providers: [VideoJobs],
+  exports: [VideoJobs],
 })
 export class VideoModule {}

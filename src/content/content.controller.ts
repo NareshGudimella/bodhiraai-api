@@ -15,7 +15,7 @@ import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { eq } from 'drizzle-orm';
 import { CurrentUser, Roles } from '../common/decorators/auth.decorators';
 import { ok } from '../common/http/api-response';
-import { ApiException, ValidationFailed } from '../common/http/api.exception';
+import { ValidationFailed } from '../common/http/api.exception';
 import { toModel } from '../common/http/eloquent';
 import { modelNotFound, routeId } from '../common/http/laravel';
 import { laravelValidate } from '../common/http/laravel-validator';
@@ -36,14 +36,13 @@ import {
   StorageService,
   VIDEO_IMPORTS_PREFIX,
 } from '../storage/storage.service';
-import { checkUpload, type IncomingFile } from '../storage/upload-rules';
+import { type IncomingFile } from '../storage/upload-rules';
 import {
   storeOrReject,
   uploadOptions,
   validateWithFiles,
 } from '../storage/uploads';
 import { lessonPlayback } from '../video/lesson-playback';
-import { VdoCipherClient, VdoCipherError } from '../video/vdocipher.client';
 import { VideoJobs } from '../video/video-jobs.service';
 import { ContentService } from './content.service';
 
@@ -52,17 +51,23 @@ const lessonModel = (l: lessons, relations: Record<string, unknown> = {}) =>
   toModel('lessons', l, { playback: lessonPlayback(l), ...relations });
 
 /**
- * Where an uploaded lesson file ended up: a stored value, a VdoCipher video,
- * or (not in legacy, with REDIS_URL) a temporary private object that the
- * `video-import` job sends to VdoCipher.
+ * Where an uploaded lesson file ended up: a stored value, or (not in legacy) a
+ * temporary private object that the `video-transcode` job turns into
+ * encrypted HLS.
  */
 type StoredMedia = {
   content_url: string | null;
-  video_id: string | null;
   video_status: 'processing' | null;
   video_upload_key: string | null;
+  video_hls_path: null;
+  video_hls_key: null;
 };
-const NO_IMPORT = { video_status: null, video_upload_key: null };
+const NO_VIDEO = {
+  video_status: null,
+  video_upload_key: null,
+  video_hls_path: null,
+  video_hls_key: null,
+} as const;
 
 type Files = Partial<Record<'content_file' | 'thumbnail_file', IncomingFile[]>>;
 
@@ -104,7 +109,6 @@ export class ContentController {
     private readonly content: ContentService,
     @Inject(DB) private readonly db: Db,
     private readonly storage: StorageService,
-    private readonly vdo: VdoCipherClient,
     private readonly videoJobs: VideoJobs,
   ) {}
 
@@ -195,15 +199,15 @@ export class ContentController {
   ) {
     const chapter = await this.chapter(raw);
     this.content.guardSubject(user, chapter.subjects);
-    // security: not in legacy: the cascade removes the lessons; their VdoCipher
+    // security: not in legacy: the cascade removes the lessons; their HLS
     // videos are deleted too (best-effort).
     const videos = await this.db.query.lessons.findMany({
       where: eq(lessonsTable.chapter_id, chapter.id),
-      columns: { video_id: true, video_upload_key: true },
+      columns: { video_hls_path: true, video_upload_key: true },
       orderBy: [asc(lessonsTable.id)],
     });
     await this.content.deleteChapter(chapter);
-    await this.videoJobs.deleteVideos(...videos.map((v) => v.video_id));
+    await this.videoJobs.deleteHls(...videos.map((v) => v.video_hls_path));
     for (const v of videos)
       if (v.video_upload_key)
         await this.storage.deletePrivate(v.video_upload_key);
@@ -277,60 +281,36 @@ export class ContentController {
 
   /**
    * security: not in legacy. Uploaded PDFs/files go to private storage
-   * (`/files/<key>`); videos go to VdoCipher. Without a VdoCipher secret a
-   * video is refused in production (503) and stored privately elsewhere.
+   * (`/files/<key>`); videos are kept privately under `video-imports/` until
+   * the `video-transcode` job has made encrypted HLS of them (the caller
+   * starts it once the lesson row is saved). Never served as uploaded.
    */
   private async storeMedia(
     file: IncomingFile,
     type: unknown,
     folder: string,
-    title: string,
   ): Promise<StoredMedia> {
     const category = type === 'pdf' ? 'pdf' : 'video';
-    if (category === 'video' && (await this.videoJobs.queued())) {
-      // not in legacy: kept privately until the `video-import` job has sent
-      // it to VdoCipher (the caller starts it once the lesson row is saved).
+    if (category === 'video') {
       const url = await storeOrReject('content_file', () =>
         this.storage.store(file, 'video', `${VIDEO_IMPORTS_PREFIX}${folder}`, {
           private: true,
         }),
       );
       return {
+        ...NO_VIDEO,
         content_url: null,
-        video_id: null,
         video_status: 'processing',
         video_upload_key: fileKeyOf(url),
       };
     }
-    if (category === 'video' && (await this.vdo.configured())) {
-      const { contentType } = await storeOrReject('content_file', () =>
-        Promise.resolve(checkUpload(file, 'video')),
-      );
-      try {
-        const videoId = await this.vdo.upload(
-          file.buffer,
-          file.originalname,
-          contentType,
-          title,
-        );
-        return { content_url: null, video_id: videoId, ...NO_IMPORT };
-      } catch (e) {
-        if (!(e instanceof VdoCipherError)) throw e;
-        throw new ApiException(
-          'The video could not be uploaded. Please try again.',
-          502,
-        );
-      }
-    }
-    if (category === 'video' && process.env.NODE_ENV === 'production')
-      throw new ApiException('Video uploads are not configured.', 503);
     const url = await storeOrReject('content_file', () =>
       this.storage.store(file, category, folder, { private: true }),
     );
-    return { content_url: url, video_id: null, ...NO_IMPORT };
+    return { ...NO_VIDEO, content_url: url };
   }
 
-  /** not in legacy: removes an upload still waiting for its `video-import` job (the job then stops). */
+  /** not in legacy: removes an upload still waiting for its `video-transcode` job (the job then stops). */
   private async dropUpload(lesson: lessons) {
     if (lesson.video_upload_key)
       await this.storage.deletePrivate(lesson.video_upload_key);
@@ -389,10 +369,7 @@ export class ContentController {
     const thumb = files.thumbnail_file?.[0];
 
     if (media)
-      Object.assign(
-        data,
-        await this.storeMedia(media, data.type, folder, data.title as string),
-      );
+      Object.assign(data, await this.storeMedia(media, data.type, folder));
     // Thumbnail precedence: explicit upload → explicit URL → auto-extracted from video.
     if (thumb) {
       data.thumbnail = await this.storeThumb(thumb, folder);
@@ -406,7 +383,7 @@ export class ContentController {
 
     const l = await this.content.createLesson(chapter, data);
     if (l.video_upload_key)
-      await this.videoJobs.startImport(l.id, l.video_upload_key);
+      await this.videoJobs.startTranscode(l.id, l.video_upload_key);
     return ok({ id: l.id }, 'Lesson added.');
   }
 
@@ -450,23 +427,18 @@ export class ContentController {
 
     // Replacement video / PDF: store the new file, then delete the old one.
     if (media) {
-      const stored = await this.storeMedia(
-        media,
-        data.type,
-        folder,
-        (data.title as string | undefined) ?? lesson.title,
-      );
+      const stored = await this.storeMedia(media, data.type, folder);
       await this.storage.delete(lesson.content_url);
-      // security: not in legacy: the replaced VdoCipher video goes too (best-effort),
-      // and an upload still being imported.
-      await this.videoJobs.deleteVideos(lesson.video_id);
+      // security: not in legacy: the replaced HLS video goes too (best-effort),
+      // and an upload still being transcoded.
+      await this.videoJobs.deleteHls(lesson.video_hls_path);
       await this.dropUpload(lesson);
       Object.assign(data, stored);
     } else if (data.content_url) {
-      // A typed URL replaces a VdoCipher video (security: not in legacy).
-      await this.videoJobs.deleteVideos(lesson.video_id);
+      // A typed URL replaces an HLS video (security: not in legacy).
+      await this.videoJobs.deleteHls(lesson.video_hls_path);
       await this.dropUpload(lesson);
-      Object.assign(data, { video_id: null, ...NO_IMPORT });
+      Object.assign(data, NO_VIDEO);
     } else {
       // `$request->filled('content_url')`: keep the existing media unless a URL was given.
       data.content_url = lesson.content_url;
@@ -496,7 +468,7 @@ export class ContentController {
       saved.video_upload_key &&
       saved.video_upload_key !== lesson.video_upload_key
     )
-      await this.videoJobs.startImport(lesson.id, saved.video_upload_key);
+      await this.videoJobs.startTranscode(lesson.id, saved.video_upload_key);
     return ok({ chapter_id: lesson.chapter_id }, 'Lesson updated.');
   }
 
@@ -505,8 +477,8 @@ export class ContentController {
     const { chapters: chapter, ...lesson } = await this.lesson(raw);
     this.content.guardSubject(user, chapter?.subjects ?? null);
     await this.content.deleteLesson(lesson);
-    // security: not in legacy: the lesson's VdoCipher video goes too (best-effort).
-    await this.videoJobs.deleteVideos(lesson.video_id);
+    // security: not in legacy: the lesson's HLS video goes too (best-effort).
+    await this.videoJobs.deleteHls(lesson.video_hls_path);
     await this.dropUpload(lesson);
     return ok({ chapter_id: lesson.chapter_id }, 'Lesson deleted.');
   }

@@ -14,8 +14,8 @@ import {
 } from './integrations';
 
 /**
- * not in legacy: provider settings (R2, MSG91, payment gateways, Anthropic,
- * VdoCipher) stored in `integration_settings`, edited by the super admin.
+ * not in legacy: provider settings (R2, MSG91, payment gateways, Anthropic)
+ * stored in `integration_settings`, edited by the super admin.
  * Panel only: the environment is not consulted.
  *
  * Read from the database on every use (a primary-key lookup), like

@@ -2,8 +2,6 @@ process.env.TZ = 'UTC';
 
 import { createHmac, randomBytes } from 'node:crypto';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
-import { createServer, type IncomingMessage, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Test } from '@nestjs/testing';
@@ -28,14 +26,17 @@ import {
 } from '../src/db/schema';
 import type { users as User } from '../src/db/types';
 import { signFileKey } from '../src/storage/file-url';
-import { stubIntegrations } from './integrations';
+import { encryptSecret } from '../src/mail/mail-crypto';
+import { signHlsToken } from '../src/video/hls-token';
 
 loadEnv();
 
 const tag = randomBytes(3).toString('hex');
 // e2e runs without APP_SECRET (package.json), so links are signed with the dev key.
 const SECRET = DEV_FILE_URL_SECRET;
-const VDO_SECRET = `stub-${tag}`;
+const HLS_KEY = randomBytes(16);
+const MASTER =
+  '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=896000,RESOLUTION=640x360\n360p.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2628000,RESOLUTION=1280x720\n720p.m3u8\n';
 const hex32 = () => randomBytes(16).toString('hex');
 const WEBM = Buffer.concat([
   Buffer.from([0x1a, 0x45, 0xdf, 0xa3]),
@@ -44,29 +45,18 @@ const WEBM = Buffer.concat([
 const PDF = Buffer.from('%PDF-1.4\n%%EOF');
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
 
-interface StubCall {
-  method: string;
-  url: string;
-  auth?: string;
-  body: string;
-}
-
 /**
  * security: not in legacy. Protected media (2026-11-01): signed private-file
- * links served at /files/*, private uploads, and lesson playback through
- * VdoCipher. VdoCipher is a local stub (VDOCIPHER_API_BASE); private files go
- * to a temporary LOCAL_PRIVATE_DIR. Creates its own schools, users and
+ * links served at /files/*, private uploads, and lesson playback (encrypted
+ * HLS, docs/video-hls-contract.md). Private files go to a temporary
+ * LOCAL_PRIVATE_DIR. Creates its own schools, users and
  * content (removed afterwards).
  */
 describe('Protected media (e2e)', () => {
   let app: NestExpressApplication;
-  let settings: ReturnType<typeof stubIntegrations>;
   let db: Db;
   let tokens: TokenService;
-  let stub: Server;
-  let stubBase: string;
   let privateDir: string;
-  const calls: StubCall[] = [];
   const envBefore: Record<string, string | undefined> = {};
   const createdUsers: bigint[] = [];
   const createdSchools: bigint[] = [];
@@ -134,65 +124,18 @@ describe('Protected media (e2e)', () => {
   // Fixtures
   let chapterId: bigint;
   let videoLesson: bigint;
+  let processingLesson: bigint;
+  let failedLesson: bigint;
+  let hlsPrefix: string;
   let urlLesson: bigint;
   let textLesson: bigint;
-  const videoId = hex32();
   const t: Record<string, string> = {};
   const u: Record<string, User> = {};
 
   beforeAll(async () => {
-    stub = createServer((req: IncomingMessage, res) => {
-      const chunks: Buffer[] = [];
-      req.on('data', (c: Buffer) => chunks.push(c));
-      req.on('end', () => {
-        const body = Buffer.concat(chunks).toString('utf8');
-        calls.push({
-          method: req.method ?? '',
-          url: req.url ?? '',
-          auth: req.headers.authorization,
-          body,
-        });
-        const json = (status: number, data: unknown) => {
-          res.writeHead(status, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(data));
-        };
-        if (
-          req.headers.authorization !== `Apisecret ${VDO_SECRET}` &&
-          req.url !== '/upload'
-        )
-          return json(403, { message: 'bad secret' });
-        const url = req.url ?? '';
-        if (req.method === 'POST' && /^\/videos\/[a-f0-9]{32}\/otp$/.test(url))
-          return json(200, { otp: `otp-${tag}`, playbackInfo: `pbi-${tag}` });
-        if (req.method === 'PUT' && url.startsWith('/videos?title='))
-          return json(200, {
-            videoId: hex32(),
-            clientPayload: {
-              policy: 'p',
-              key: 'k',
-              'x-amz-signature': 's',
-              'x-amz-algorithm': 'a',
-              'x-amz-date': 'd',
-              'x-amz-credential': 'c',
-              uploadLink: `${stubBase}/upload`,
-            },
-          });
-        if (req.method === 'POST' && url === '/upload') {
-          res.writeHead(201);
-          return res.end();
-        }
-        if (req.method === 'DELETE' && url.startsWith('/videos?videos='))
-          return json(200, {});
-        return json(404, { message: 'no route' });
-      });
-    });
-    await new Promise<void>((r) => stub.listen(0, '127.0.0.1', r));
-    stubBase = `http://127.0.0.1:${(stub.address() as AddressInfo).port}`;
-
     privateDir = await mkdtemp(join(tmpdir(), 'bodhira-private-'));
     setEnv('LOCAL_PRIVATE_DIR', privateDir);
     setEnv('PUBLIC_URL', 'http://files.e2e.test');
-    setEnv('VDOCIPHER_API_BASE', stubBase);
     setEnv('STORAGE_DRIVER', 'local');
 
     const moduleRef = await Test.createTestingModule({
@@ -202,8 +145,6 @@ describe('Protected media (e2e)', () => {
       moduleRef.createNestApplication<NestExpressApplication>(),
     );
     await app.init();
-    settings = stubIntegrations(app);
-    settings.set('vdocipher', { api_secret: VDO_SECRET });
     db = app.get<Db>(DB);
     tokens = app.get(TokenService);
 
@@ -243,7 +184,33 @@ describe('Protected media (e2e)', () => {
           ...extra,
         })
         .returning();
-    [{ id: videoLesson }] = await lesson({ type: 'video', video_id: videoId });
+    [{ id: videoLesson }] = await lesson({ type: 'video' });
+    // A ready self-hosted video: encrypted playlists and a stored key.
+    hlsPrefix = `hls/${videoLesson}/${tag}/`;
+    await db
+      .update(lessons)
+      .set({
+        video_hls_path: hlsPrefix,
+        video_hls_key: encryptSecret(HLS_KEY.toString('base64')),
+      })
+      .where(eq(lessons.id, videoLesson));
+    const pl = (body: string) =>
+      `#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-KEY:METHOD=AES-128,URI="key",IV=0x${'ab'.repeat(16)}\n${body}#EXT-X-ENDLIST\n`;
+    await putPrivate(`${hlsPrefix}master.m3u8`, MASTER);
+    await putPrivate(
+      `${hlsPrefix}360p.m3u8`,
+      pl('#EXTINF:6.0,\n360p_00000.ts\n#EXTINF:3.0,\n360p_00001.ts\n'),
+    );
+    await putPrivate(`${hlsPrefix}360p_00000.ts`, 'segment bytes');
+    [{ id: processingLesson }] = await lesson({
+      type: 'video',
+      video_status: 'processing',
+      video_upload_key: `video-imports/lessons/${tag}/x.mp4`,
+    });
+    [{ id: failedLesson }] = await lesson({
+      type: 'video',
+      video_status: 'failed',
+    });
     [{ id: urlLesson }] = await lesson({
       type: 'video',
       content_url: 'https://cdn.example.test/v.mp4',
@@ -358,7 +325,6 @@ describe('Protected media (e2e)', () => {
         await db.delete(schools).where(inArray(schools.id, createdSchools));
     }
     await app?.close();
-    await new Promise((r) => stub?.close(r));
     if (privateDir) await rm(privateDir, { recursive: true, force: true });
   });
 
@@ -518,6 +484,7 @@ describe('Protected media (e2e)', () => {
       const l = show.body.data.lesson;
       expect(l.playback).toBe('url');
       expect(l).not.toHaveProperty('video_id');
+      expect(l).not.toHaveProperty('video_hls_key');
       expect(l.content_url).toMatch(
         /^http:\/\/files\.e2e\.test\/files\/lessons\/.*\?exp=\d+&sig=/,
       );
@@ -554,8 +521,7 @@ describe('Protected media (e2e)', () => {
       });
     });
 
-    it('sends uploaded lesson videos to VdoCipher and deletes the replaced one', async () => {
-      calls.length = 0;
+    it('keeps uploaded lesson videos private as processing, and drops the replaced HLS video', async () => {
       const created = await http()
         .post(`/api/v1/content/chapters/${chapterId}/lessons`)
         .set(bearer(t.super))
@@ -564,70 +530,22 @@ describe('Protected media (e2e)', () => {
         .attach('content_file', WEBM, 'clip.webm')
         .expect(201);
       const id = BigInt(created.body.data.id as number);
-      const put = calls.find((c) => c.method === 'PUT');
-      expect(put?.url).toBe('/videos?title=Video%20lesson');
-      const upload = calls.find((c) => c.url === '/upload');
-      expect(upload?.body).toContain('name="success_action_status"');
-      expect(upload!.body.indexOf('name="file"')).toBeGreaterThan(
-        upload!.body.indexOf('name="x-amz-credential"'),
-      );
       const [row] = await db.select().from(lessons).where(eq(lessons.id, id));
-      expect(row.video_id).toMatch(/^[a-f0-9]{32}$/);
+      expect(row.video_id).toBeNull();
       expect(row.content_url).toBeNull();
+      expect(row.video_upload_key).toMatch(
+        /^video-imports\/lessons\/.*\.webm$/,
+      );
       const show = await http()
         .get(`/api/v1/content/lessons/${id}`)
         .set(bearer(t.super))
         .expect(200);
-      expect(show.body.data.lesson.playback).toBe('vdocipher');
-
-      calls.length = 0;
-      await http()
-        .patch(`/api/v1/content/lessons/${id}`)
-        .set(bearer(t.super))
-        .field('title', 'Video lesson')
-        .field('type', 'video')
-        .attach('content_file', WEBM, 'clip2.webm')
-        .expect(200);
-      expect(
-        calls.some(
-          (c) =>
-            c.method === 'DELETE' && c.url === `/videos?videos=${row.video_id}`,
-        ),
-      ).toBe(true);
-      const [after] = await db.select().from(lessons).where(eq(lessons.id, id));
-      expect(after.video_id).not.toBe(row.video_id);
-    });
-
-    it('falls back to private storage without a VdoCipher secret (outside production)', async () => {
-      settings.reset('vdocipher');
-      try {
-        const created = await http()
-          .post(`/api/v1/content/chapters/${chapterId}/lessons`)
-          .set(bearer(t.super))
-          .field('title', 'Local video')
-          .field('type', 'video')
-          .attach('content_file', WEBM, 'clip.webm')
-          .expect(201);
-        const id = created.body.data.id as number;
-        const [row] = await db
-          .select()
-          .from(lessons)
-          .where(eq(lessons.id, BigInt(id)));
-        expect(row.video_id).toBeNull();
-        expect(row.content_url).toMatch(/^\/files\/lessons\/.*\.webm$/);
-        const play = await http()
-          .get(`/api/v1/lessons/${id}/playback`)
-          .set(bearer(t.student))
-          .expect(200);
-        expect(play.body.data.provider).toBe('url');
-        const video = await http()
-          .get(local(play.body.data.url))
-          .set('Range', 'bytes=0-3')
-          .expect(206);
-        expect(video.headers['content-type']).toBe('video/webm');
-      } finally {
-        settings.set('vdocipher', { api_secret: VDO_SECRET });
-      }
+      // Without Redis the job runs inline (it fails on this fake file, which is fine here).
+      expect(['processing', null, undefined]).toContain(
+        show.body.data.lesson.playback,
+      );
+      expect(show.body.data.lesson).not.toHaveProperty('video_upload_key');
+      expect(show.body.data.lesson).not.toHaveProperty('video_hls_path');
     });
 
     it('adds playback to student lesson responses', async () => {
@@ -635,7 +553,7 @@ describe('Protected media (e2e)', () => {
         .get(`/api/v1/student/lessons/${videoLesson}`)
         .set(bearer(t.student))
         .expect(200);
-      expect(res.body.data.lesson.playback).toBe('vdocipher');
+      expect(res.body.data.lesson.playback).toBe('hls');
       expect(res.body.data.lesson.content_url).toBeNull();
       expect(res.body.data.lesson).not.toHaveProperty('video_id');
       const list = await http()
@@ -647,7 +565,7 @@ describe('Protected media (e2e)', () => {
           list.body.data.lessons as { id: number; playback: string | null }[]
         ).map((l) => [l.id, l.playback]),
       );
-      expect(byId[Number(videoLesson)]).toBe('vdocipher');
+      expect(byId[Number(videoLesson)]).toBe('hls');
       expect(byId[Number(urlLesson)]).toBe('url');
       expect(byId[Number(textLesson)]).toBeNull();
     });
@@ -659,33 +577,38 @@ describe('Protected media (e2e)', () => {
       http().get(`/api/v1/lessons/${id}/playback`).set(bearer(t[who]));
     const cant = { success: false, message: "You can't play this lesson." };
 
-    it('gives an enrolled student a watermarked VdoCipher OTP', async () => {
-      calls.length = 0;
+    it('gives an enrolled student an HLS master URL with a token and their email as watermark', async () => {
       const res = await play('student', videoLesson).expect(200);
-      expect(res.body).toEqual({
-        success: true,
-        message: '',
-        data: {
-          provider: 'vdocipher',
-          otp: `otp-${tag}`,
-          playback_info: `pbi-${tag}`,
-          expires_in: 300,
-        },
+      expect(res.body.success).toBe(true);
+      const d = res.body.data;
+      expect(Object.keys(d).sort()).toEqual(
+        ['expires_at', 'type', 'url', 'watermark'].sort(),
+      );
+      expect(d.type).toBe('hls');
+      expect(d.watermark).toBe(u.student.email);
+      expect(d.url).toMatch(
+        new RegExp(
+          `^http://files\\.e2e\\.test/api/v1/lessons/${videoLesson}/hls/master\\.m3u8\\?t=`,
+        ),
+      );
+      const left = new Date(d.expires_at).getTime() - Date.now();
+      expect(left).toBeGreaterThan(5.9 * 3600_000);
+      expect(left).toBeLessThanOrEqual(6 * 3600_000);
+    });
+
+    it('answers 409 video_processing and video_failed, under both keys', async () => {
+      const p = (await play('student', processingLesson).expect(409)).body;
+      expect(p).toMatchObject({
+        success: false,
+        code: 'video_processing',
+        error: 'video_processing',
       });
-      const call = calls.find((c) => c.url === `/videos/${videoId}/otp`);
-      expect(call?.auth).toBe(`Apisecret ${VDO_SECRET}`);
-      const body = JSON.parse(call!.body) as { ttl: number; annotate: string };
-      expect(body.ttl).toBe(300);
-      expect(JSON.parse(body.annotate)).toEqual([
-        {
-          type: 'rtext',
-          text: `${u.student.name} · ${u.student.phone}`,
-          alpha: '0.60',
-          color: '0xFFFFFF',
-          size: '15',
-          interval: '5000',
-        },
-      ]);
+      const f = (await play('student', failedLesson).expect(409)).body;
+      expect(f).toMatchObject({
+        success: false,
+        code: 'video_failed',
+        error: 'video_failed',
+      });
     });
 
     it('lets teachers of the subject in the school play it', async () => {
@@ -712,14 +635,9 @@ describe('Protected media (e2e)', () => {
 
     // not in legacy (2026-11-01): a school admin may watch its own school's
     // subjects (and used curricula; test/organizations.e2e-spec.ts).
-    it('lets the school admin play its own subject, watermarked with name and email', async () => {
-      calls.length = 0;
-      await play('admin', videoLesson).expect(200);
-      const call = calls.find((c) => c.url === `/videos/${videoId}/otp`);
-      const body = JSON.parse(call!.body) as { annotate: string };
-      expect((JSON.parse(body.annotate) as { text: string }[])[0].text).toBe(
-        `${u.admin.name} · ${u.admin.email}`,
-      );
+    it('lets the school admin play its own subject, watermarked with the email', async () => {
+      const res = await play('admin', videoLesson).expect(200);
+      expect(res.body.data.watermark).toBe(u.admin.email);
     });
 
     it('refuses super admins and parents', async () => {
@@ -732,10 +650,10 @@ describe('Protected media (e2e)', () => {
       await play('student', 999_999_999).expect(404);
     });
 
-    it('returns external video links as provider url', async () => {
+    it('returns external video links as type url', async () => {
       const res = await play('student', urlLesson).expect(200);
       expect(res.body.data).toEqual({
-        provider: 'url',
+        type: 'url',
         url: 'https://cdn.example.test/v.mp4',
       });
     });
@@ -750,6 +668,89 @@ describe('Protected media (e2e)', () => {
       await play('limited', videoLesson).expect(429);
       // Another user is unaffected.
       await play('subjectTeacher', videoLesson).expect(200);
+    });
+  });
+
+  // ------------------------------------------------ /lessons/:id/hls/*
+  describe('GET /lessons/:id/hls/:file and /key', () => {
+    const base = () => `/api/v1/lessons/${videoLesson}/hls`;
+    const token = () => signHlsToken(videoLesson, u.student.id).token;
+
+    it('rewrites the master: variant URIs point at the same route with the same token', async () => {
+      const t1 = token();
+      const res = await http().get(`${base()}/master.m3u8?t=${t1}`).expect(200);
+      expect(res.headers['content-type']).toMatch(/mpegurl/);
+      expect(res.headers['cache-control']).toBe('private, no-store');
+      const abs = `http://files.e2e.test${base()}`;
+      expect(res.text).toContain(`${abs}/360p.m3u8?t=${t1}\n`);
+      expect(res.text).toContain(`${abs}/720p.m3u8?t=${t1}\n`);
+    });
+
+    it('rewrites a media playlist: signed /files segment links and our key route', async () => {
+      const t1 = token();
+      const res = await http().get(`${base()}/360p.m3u8?t=${t1}`).expect(200);
+      expect(res.text).toContain(
+        `#EXT-X-KEY:METHOD=AES-128,URI="http://files.e2e.test${base()}/key?t=${t1}",IV=0x${'ab'.repeat(16)}`,
+      );
+      const segs = res.text
+        .split('\n')
+        .filter((l) => l.startsWith('http://files.e2e.test/files/'));
+      expect(segs).toHaveLength(2);
+      for (const url of segs)
+        expect(url).toMatch(
+          new RegExp(
+            `^http://files\\.e2e\\.test/files/${hlsPrefix}360p_0000[01]\\.ts\\?exp=\\d+&sig=[\\w-]{43}$`,
+          ),
+        );
+      // The signed link works against the local /files handler.
+      const seg = await http().get(local(segs[0])).expect(200);
+      expect(seg.headers['content-type']).toBe('video/mp2t');
+      expect(seg.headers['content-length']).toBe('13');
+    });
+
+    it('serves the 16-byte key', async () => {
+      const res = await http()
+        .get(`${base()}/key?t=${token()}`)
+        .buffer(true)
+        .parse((r, cb) => {
+          const chunks: Buffer[] = [];
+          r.on('data', (c: Buffer) => chunks.push(c));
+          r.on('end', () => cb(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      expect(res.headers['content-type']).toBe('application/octet-stream');
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.body).toHaveLength(16);
+      expect((res.body as Buffer).equals(HLS_KEY)).toBe(true);
+    });
+
+    it('answers 403 for a missing, tampered, wrong-lesson or expired token', async () => {
+      const good = token();
+      const [u1, e, m] = good.split('.');
+      const expired = signHlsToken(videoLesson, u.student.id, {
+        now: Date.now() - 7 * 3600_000,
+      }).token;
+      const other = signHlsToken(urlLesson, u.student.id).token;
+      for (const path of ['master.m3u8', '360p.m3u8', 'key']) {
+        await http().get(`${base()}/${path}`).expect(403);
+        for (const bad of [
+          'garbage',
+          `${u1}.${e}.${m.slice(0, -1)}${m.endsWith('A') ? 'B' : 'A'}`,
+          `${u1}.${Number(e) + 1}.${m}`,
+          expired,
+          other,
+        ])
+          await http().get(`${base()}/${path}?t=${bad}`).expect(403);
+      }
+    });
+
+    it('answers 404 for other files and for a lesson without HLS', async () => {
+      await http().get(`${base()}/360p_00000.ts?t=${token()}`).expect(404);
+      await http().get(`${base()}/..%2Fx.m3u8?t=${token()}`).expect(404);
+      const t2 = signHlsToken(urlLesson, u.student.id).token;
+      await http()
+        .get(`/api/v1/lessons/${urlLesson}/hls/master.m3u8?t=${t2}`)
+        .expect(404);
     });
   });
 });

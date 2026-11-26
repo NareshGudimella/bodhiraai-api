@@ -3,7 +3,7 @@
  * (Integrations), their fields and validation. Legacy (and this API until
  * 2026-11-25) read these from the environment; now only the panel counts.
  * Test-only knobs stay in the environment and can't be set here:
- * STORAGE_DRIVER, R2_ENDPOINT, VDOCIPHER_API_BASE, MSG91_API_BASE,
+ * STORAGE_DRIVER, R2_ENDPOINT, MSG91_API_BASE,
  * ANTHROPIC_BASE_URL (read by the Anthropic SDK).
  */
 
@@ -21,7 +21,6 @@ interface FieldDef {
 const str = (max: number) => ['nullable', 'string', `max:${max}`];
 const secret = (max = 500): FieldDef => ({ secret: true, rules: str(max) });
 const BUCKET = [...str(63), 'regex:/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/'];
-const VIDEO_ID = ['nullable', 'string', 'regex:/^[a-fA-F0-9]{32}$/'];
 
 export const PROVIDERS = {
   /** Cloudflare R2 (used when STORAGE_DRIVER=r2). */
@@ -32,7 +31,7 @@ export const PROVIDERS = {
     bucket: { rules: BUCKET },
     public_url: { rules: ['nullable', 'url', 'max:190'] },
     private_bucket: { rules: [...BUCKET, 'different:bucket'] },
-    /** Optional: lesson video uploads waiting for VdoCipher; else the private bucket. */
+    /** Optional: lesson video uploads waiting for transcoding; else the private bucket. */
     video_bucket: {
       rules: [...BUCKET, 'different:bucket', 'different:private_bucket'],
     },
@@ -75,20 +74,6 @@ export const PROVIDERS = {
     daily_token_limit: {
       type: 'int',
       rules: ['nullable', 'integer', 'min:1', 'max:100000000'],
-    },
-  },
-  vdocipher: {
-    api_secret: secret(),
-    marketing_video_id: { rules: VIDEO_ID },
-    public_video_ids: {
-      rules: [
-        ...str(2000),
-        'regex:/^\\s*[a-fA-F0-9]{32}(\\s*,\\s*[a-fA-F0-9]{32})*\\s*$/',
-      ],
-    },
-    otp_ttl: {
-      type: 'int',
-      rules: ['nullable', 'integer', 'min:30', 'max:86400'],
     },
   },
 } satisfies Record<string, Record<string, FieldDef>>;
@@ -137,18 +122,11 @@ export interface AiConfig {
   max_tokens: number | null;
   daily_token_limit: number | null;
 }
-export interface VdoCipherConfig {
-  api_secret: S;
-  marketing_video_id: S;
-  public_video_ids: S;
-  otp_ttl: number | null;
-}
 export interface Configs {
   storage: StorageConfig;
   sms: SmsConfig;
   payments: PaymentsConfig;
   ai: AiConfig;
-  vdocipher: VdoCipherConfig;
 }
 
 /** The provider is usable (what the panel's "configured" badge shows). */
@@ -179,8 +157,6 @@ export function isConfigured<P extends Provider>(p: P, cfg: Configs[P]) {
     }
     case 'ai':
       return !!(cfg as AiConfig).api_key;
-    case 'vdocipher':
-      return !!(cfg as VdoCipherConfig).api_secret;
   }
   return false;
 }

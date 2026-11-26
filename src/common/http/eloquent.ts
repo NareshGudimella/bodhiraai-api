@@ -54,9 +54,10 @@ const MODELS = {
   },
   attendance: { casts: { date: 'date' } },
   lessons: {
-    // video_id and video_upload_key (Node-only columns) stay internal; clients
-    // get `playback`. `video_status` (processing/failed) shows in the editor.
-    hidden: ['video_id', 'video_upload_key'],
+    // video_id, video_upload_key and the HLS path and key (Node-only columns)
+    // stay internal; clients get `playback`. `video_status` (processing/failed)
+    // shows in the editor.
+    hidden: ['video_id', 'video_upload_key', 'video_hls_path', 'video_hls_key'],
     casts: {
       is_free: 'bool',
       is_published: 'bool',

@@ -21,7 +21,7 @@ export type JobName =
   | 'invoice'
   | 'notifications'
   | 'video-delete'
-  | 'video-import';
+  | 'video-transcode';
 
 /** `final`: the last attempt (always true inline), where handlers give up gracefully. */
 export interface JobContext {
@@ -37,8 +37,8 @@ export const JOB_POLICY: Record<JobName, { attempts: number; delay: number }> =
     invoice: { attempts: 6, delay: 30_000 },
     notifications: { attempts: 5, delay: 5_000 },
     'video-delete': { attempts: 8, delay: 60_000 },
-    // Also polls VdoCipher until the video is ready: ~8.5 hours in all.
-    'video-import': { attempts: 10, delay: 30_000 },
+    // CPU-heavy (ffmpeg); a few retries for a busy host or a storage hiccup.
+    'video-transcode': { attempts: 3, delay: 60_000 },
   };
 
 export const QUEUE_NAME = 'jobs';

@@ -16,7 +16,6 @@
  *             RAZORPAY_WEBHOOK_SECRET, STRIPE_SECRET, STRIPE_WEBHOOK_SECRET,
  *             BILLING_DEMO=1 (→ allow_demo)
  *   ai        ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_MAX_TOKENS, AI_DAILY_TOKEN_LIMIT
- *   vdocipher VDOCIPHER_API_SECRET, VDOCIPHER_VIDEO_ID, VDOCIPHER_PUBLIC_VIDEO_IDS, VDOCIPHER_OTP_TTL
  *   sms       MSG91_AUTH_KEY, MSG91_SENDER_ID, MSG91_TEMPLATE_ID (saved disabled)
  *   mail      MAIL_MAILER=smtp, MAIL_HOST, MAIL_PORT, MAIL_SCHEME, MAIL_USERNAME,
  *             MAIL_PASSWORD, MAIL_FROM_ADDRESS, MAIL_FROM_NAME
@@ -77,12 +76,6 @@ export function envSettings(): Record<Provider | 'mail', Values> {
       model: e('ANTHROPIC_MODEL'),
       max_tokens: e('ANTHROPIC_MAX_TOKENS'),
       daily_token_limit: e('AI_DAILY_TOKEN_LIMIT'),
-    },
-    vdocipher: {
-      api_secret: e('VDOCIPHER_API_SECRET'),
-      marketing_video_id: e('VDOCIPHER_VIDEO_ID'),
-      public_video_ids: e('VDOCIPHER_PUBLIC_VIDEO_IDS'),
-      otp_ttl: e('VDOCIPHER_OTP_TTL'),
     },
     mail:
       e('MAIL_MAILER') === 'smtp'

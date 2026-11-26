@@ -841,15 +841,18 @@ export const lessons = pgTable(
     thumbnail: citext('thumbnail'),
     content_url: citext('content_url'),
     content_body: text('content_body'),
-    // security: not in legacy (Node-only column): the VdoCipher video id of an
-    // uploaded lesson video. When set, content_url is null.
+    // Legacy column, kept (unused, never written) for parity with imported data.
     video_id: text('video_id'),
-    // not in legacy (Node-only): an uploaded video being imported into
-    // VdoCipher by the worker. `processing` while it runs (video_upload_key is
-    // the temporary private-bucket object), `failed` when it gave up (the
+    // not in legacy (Node-only): an uploaded video being transcoded to
+    // encrypted HLS by the worker. `processing` while it runs (video_upload_key
+    // is the original in the private bucket), `failed` when it gave up (the
     // editor uploads again), null otherwise.
     video_status: text('video_status'),
     video_upload_key: text('video_upload_key'),
+    // not in legacy (Node-only): the HLS prefix in the private bucket
+    // (`hls/<lesson>/<version>/`) and the AES-128 key, encrypted like panel secrets.
+    video_hls_path: text('video_hls_path'),
+    video_hls_key: text('video_hls_key'),
     duration_sec: bigint('duration_sec', { mode: 'number' })
       .notNull()
       .default(0),
@@ -2658,8 +2661,8 @@ export const mail_settings = pgTable('mail_settings', {
 });
 
 // not in legacy: provider settings edited by the super admin under Integrations
-// (`src/integrations/`): one row per provider (`storage`, `sms`, `payments`, `ai`,
-// `vdocipher`). `settings` holds the plain values; `secrets` maps a field name
+// (`src/integrations/`): one row per provider (`storage`, `sms`, `payments`, `ai`;
+// a legacy `vdocipher` row is ignored). `settings` holds the plain values; `secrets` maps a field name
 // to its AES-256-GCM ciphertext (`mail/mail-crypto.ts`), never returned by the API.
 export const integration_settings = pgTable('integration_settings', {
   provider: citext('provider').primaryKey(),

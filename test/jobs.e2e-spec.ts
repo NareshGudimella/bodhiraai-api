@@ -1,10 +1,9 @@
 process.env.TZ = 'UTC';
 
+import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { createServer, type IncomingMessage, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NestFactory } from '@nestjs/core';
@@ -34,15 +33,12 @@ import {
 import type { users as User } from '../src/db/types';
 import { JobsService, QUEUE_NAME } from '../src/jobs/jobs.service';
 import { NotificationService } from '../src/notification/notification.service';
-import { stubIntegrations } from './integrations';
 
 loadEnv();
 
 const tag = randomBytes(3).toString('hex');
 const PREFIX = `e2e-jobs-${tag}`;
 const REDIS = process.env.E2E_REDIS_URL ?? 'redis://localhost:6379';
-const VDO_SECRET = `stub-${tag}`;
-const hex32 = () => randomBytes(16).toString('hex');
 const WEBM = Buffer.concat([
   Buffer.from([0x1a, 0x45, 0xdf, 0xa3]),
   randomBytes(64),
@@ -67,7 +63,7 @@ async function until<T>(
  * prefix). The API app only enqueues; a second Nest context in this process
  * is the worker (`src/worker.ts` does the same). Each flow is checked before
  * the worker starts (nothing done yet) and after (done by the worker).
- * VdoCipher is a local stub; private files go to a temporary directory.
+ * Private files go to a temporary directory; the video job runs the real ffmpeg.
  * Creates its own school, users and content (removed afterwards).
  */
 describe('Background jobs with Redis (e2e)', () => {
@@ -75,10 +71,8 @@ describe('Background jobs with Redis (e2e)', () => {
   let worker: INestApplicationContext | null = null;
   let db: Db;
   let tokens: TokenService;
-  let stub: Server;
+  let clip: Buffer;
   let privateDir: string;
-  const calls: { method: string; url: string }[] = [];
-  const failingVideos = new Set<string>();
   const envBefore: Record<string, string | undefined> = {};
   const createdUsers: bigint[] = [];
   let schoolId: bigint;
@@ -100,46 +94,42 @@ describe('Background jobs with Redis (e2e)', () => {
       logger: false,
     });
     // The worker reads its own settings (another app context), like the real one.
-    stubIntegrations(worker).set('vdocipher', { api_secret: VDO_SECRET });
     worker.get(JobsService).startWorker();
   };
 
   beforeAll(async () => {
-    stub = createServer((req: IncomingMessage, res) => {
-      req.resume();
-      req.on('end', () => {
-        const url = req.url ?? '';
-        calls.push({ method: req.method ?? '', url });
-        const json = (status: number, data: unknown) => {
-          res.writeHead(status, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(data));
-        };
-        if (req.headers.authorization !== `Apisecret ${VDO_SECRET}`)
-          return json(403, {});
-        if (req.method === 'PUT' && url === '/videos/importUrl')
-          return json(200, { id: hex32() });
-        const status = /^\/videos\/([a-f0-9]{32})$/.exec(url);
-        if (req.method === 'GET' && status)
-          return json(200, {
-            status: failingVideos.size ? 'Error' : 'ready',
-          });
-        if (req.method === 'POST' && /^\/videos\/[a-f0-9]{32}\/otp$/.test(url))
-          return json(200, { otp: 'otp', playbackInfo: 'pbi' });
-        if (req.method === 'DELETE' && url.startsWith('/videos?videos='))
-          return json(200, {});
-        return json(404, {});
-      });
-    });
-    await new Promise<void>((r) => stub.listen(0, '127.0.0.1', r));
-    const stubBase = `http://127.0.0.1:${(stub.address() as AddressInfo).port}`;
-
     privateDir = await mkdtemp(join(tmpdir(), 'bodhira-jobs-'));
     setEnv('REDIS_URL', REDIS);
     setEnv('BULLMQ_PREFIX', PREFIX);
     setEnv('LOCAL_PRIVATE_DIR', privateDir);
     setEnv('STORAGE_DRIVER', 'local');
     setEnv('PUBLIC_URL', 'http://files.e2e.test');
-    setEnv('VDOCIPHER_API_BASE', stubBase);
+    // A 3 s test clip for the transcode job.
+    const clipFile = join(privateDir, 'clip.mp4');
+    execFileSync('ffmpeg', [
+      '-y',
+      '-loglevel',
+      'error',
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc=size=640x360:rate=25:duration=3',
+      '-f',
+      'lavfi',
+      '-i',
+      'sine=frequency=440:duration=3',
+      '-c:v',
+      'libx264',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-shortest',
+      '-movflags',
+      '+faststart',
+      clipFile,
+    ]);
+    clip = await readFile(clipFile);
     setEnv('APP_SECRET', undefined);
 
     const moduleRef = await Test.createTestingModule({
@@ -150,7 +140,6 @@ describe('Background jobs with Redis (e2e)', () => {
     );
     await app.init();
     // Demo checkout: no gateway configured (the stub's default).
-    stubIntegrations(app).set('vdocipher', { api_secret: VDO_SECRET });
     db = app.get<Db>(DB);
     tokens = app.get(TokenService);
 
@@ -245,7 +234,6 @@ describe('Background jobs with Redis (e2e)', () => {
       await db.delete(schools).where(eq(schools.id, schoolId));
     }
     await app?.close();
-    await new Promise((r) => stub?.close(r));
     if (privateDir) await rm(privateDir, { recursive: true, force: true });
   });
 
@@ -343,23 +331,19 @@ describe('Background jobs with Redis (e2e)', () => {
     });
 
     it('keeps an uploaded video private and reports it as processing (409 to play)', async () => {
-      calls.length = 0;
       const created = await http()
         .post(`/api/v1/content/chapters/${chapterId}/lessons`)
         .set(bearer(t.super))
         .field('title', 'Queued video')
         .field('type', 'video')
-        .attach('content_file', WEBM, 'clip.webm')
+        .attach('content_file', clip, 'clip.mp4')
         .expect(201);
       const id = BigInt(created.body.data.id as number);
-      expect(calls).toEqual([]); // nothing sent to VdoCipher by the API
       const row = await lessonRow(id);
       expect(row.video_status).toBe('processing');
-      expect(row.video_id).toBeNull();
+      expect(row.video_hls_path).toBeNull();
       expect(row.content_url).toBeNull();
-      expect(row.video_upload_key).toMatch(
-        /^video-imports\/lessons\/.*\.webm$/,
-      );
+      expect(row.video_upload_key).toMatch(/^video-imports\/lessons\/.*\.mp4$/);
       expect(existsSync(join(privateDir, row.video_upload_key!))).toBe(true);
       pending.lesson = id;
       pending.uploadKey = row.video_upload_key!;
@@ -385,6 +369,7 @@ describe('Background jobs with Redis (e2e)', () => {
         message:
           'This video is still processing. Please try again in a few minutes.',
         code: 'video_processing',
+        error: 'video_processing',
       });
     });
 
@@ -439,47 +424,40 @@ describe('Background jobs with Redis (e2e)', () => {
       expect(JSON.parse(row.data)).toEqual({ title: `Jobs ${tag}` });
     });
 
-    it('imports the video into VdoCipher, then plays it and drops the temporary file', async () => {
+    it('transcodes the video to encrypted HLS, then plays it and drops the original', async () => {
       const id = pending.lesson!;
       const row = await until(async () => {
         const r = await lessonRow(id);
         return r.video_status === null ? r : null;
-      }, 'the video import');
-      expect(row.video_id).toMatch(/^[a-f0-9]{32}$/);
+      }, 'the video transcode');
+      expect(row.video_hls_path).toMatch(
+        new RegExp(`^hls/${id}/[0-9a-f]{16}/$`),
+      );
+      expect(row.video_hls_key).toMatch(/^v1:/);
       expect(row.video_upload_key).toBeNull();
-      expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
-        'PUT /videos/importUrl',
-        `GET /videos/${row.video_id}`,
-      ]);
       expect(existsSync(join(privateDir, pending.uploadKey!))).toBe(false);
+      for (const f of ['master.m3u8', '360p.m3u8'])
+        expect(existsSync(join(privateDir, row.video_hls_path!, f))).toBe(true);
       const play = await http()
         .get(`/api/v1/lessons/${id}/playback`)
         .set(bearer(t.student))
         .expect(200);
-      expect(play.body.data.provider).toBe('vdocipher');
+      expect(play.body.data.type).toBe('hls');
 
-      // Deleting the lesson deletes its VdoCipher video through a job.
-      calls.length = 0;
+      // Deleting the lesson deletes its HLS objects through a job.
       await http()
         .delete(`/api/v1/content/lessons/${id}`)
         .set(bearer(t.super))
         .expect(200);
       await until(
         () =>
-          Promise.resolve(
-            calls.some(
-              (c) =>
-                c.method === 'DELETE' &&
-                c.url === `/videos?videos=${row.video_id}`,
-            ),
-          ),
-        'the video delete',
+          Promise.resolve(!existsSync(join(privateDir, row.video_hls_path!))),
+        'the HLS delete',
       );
     });
 
-    it('marks a video VdoCipher rejects as failed, for the editor to upload again', async () => {
-      failingVideos.add('all');
-      try {
+    it('marks a file that is not a video as failed, for the editor to upload again', async () => {
+      {
         const created = await http()
           .post(`/api/v1/content/chapters/${chapterId}/lessons`)
           .set(bearer(t.super))
@@ -491,8 +469,8 @@ describe('Background jobs with Redis (e2e)', () => {
         const row = await until(async () => {
           const r = await lessonRow(id);
           return r.video_status === 'failed' ? r : null;
-        }, 'the failed import');
-        expect(row.video_id).toBeNull();
+        }, 'the failed transcode');
+        expect(row.video_hls_path).toBeNull();
         expect(row.video_upload_key).toBeNull();
         const show = await http()
           .get(`/api/v1/content/lessons/${id}`)
@@ -500,18 +478,18 @@ describe('Background jobs with Redis (e2e)', () => {
           .expect(200);
         expect(show.body.data.lesson.playback).toBeNull();
         expect(show.body.data.lesson.video_status).toBe('failed');
-        await http()
+        const play = await http()
           .get(`/api/v1/lessons/${id}/playback`)
           .set(bearer(t.student))
-          .expect(404);
-      } finally {
-        failingVideos.clear();
+          .expect(409);
+        expect(play.body.code).toBe('video_failed');
+        expect(play.body.error).toBe('video_failed');
       }
     });
 
     it('leaves nothing failed in the queue', async () => {
       const counts = await app.get(JobsService).counts();
-      expect(counts?.failed).toBe(1); // the rejected video above
+      expect(counts?.failed).toBe(1); // the unreadable video above
       const rows = await db
         .select({ id: lessons.id })
         .from(lessons)

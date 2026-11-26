@@ -1,7 +1,9 @@
 import {
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -10,7 +12,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { IntegrationSettingsService } from '../integrations/integration-settings.service';
 import { isConfigured, type StorageConfig } from '../integrations/integrations';
 import { ApiException } from '../common/http/api.exception';
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileKeyOf, FILES_PREFIX, signFileKey } from './file-url';
 import { strRandom, strSlug } from './laravel-str';
@@ -87,13 +89,13 @@ export interface StoreOptions {
  * layout and the call returns `/files/<key>`, which responses sign
  * (file-url.ts). Invoices share the bucket but are never signable.
  */
-/** Key prefix of lesson videos waiting for their `video-import` job (content.controller). */
+/** Key prefix of lesson videos waiting for their `video-transcode` job (content.controller). */
 export const VIDEO_IMPORTS_PREFIX = 'video-imports/';
 
 /**
  * not in legacy: the R2 bucket of a private key. Lesson video uploads go to
- * `video_bucket` when one is set (private, only VdoCipher fetches them by a
- * presigned link); everything else private to `private_bucket`. Never falls
+ * `video_bucket` when one is set (private, only the transcode worker reads
+ * them); everything else private to `private_bucket`. Never falls
  * back to the public bucket: keys like invoice numbers are guessable.
  */
 export function privateBucketFor(cfg: StorageConfig, key: string): string {
@@ -334,6 +336,45 @@ export class StorageService {
     }
   }
 
+  /**
+   * not in legacy: removes every private object under `hls/…/` (best-effort,
+   * logged). Only HLS prefixes: a wrong prefix must never wipe other files.
+   */
+  async deletePrivatePrefix(prefix: string) {
+    if (!/^hls\/[^/.]+\/[^/.]+\/$/.test(prefix))
+      throw new Error('Not an HLS prefix');
+    try {
+      const cfg = await this.r2Config();
+      if (!cfg) {
+        const path = StorageService.privatePath(prefix);
+        if (path) await rm(path, { recursive: true, force: true });
+        return;
+      }
+      const client = this.client(cfg);
+      const Bucket = this.privateBucket(cfg, prefix);
+      let ContinuationToken: string | undefined;
+      do {
+        const page = await client.send(
+          new ListObjectsV2Command({
+            Bucket,
+            Prefix: prefix,
+            ContinuationToken,
+          }),
+        );
+        const Objects = (page.Contents ?? []).flatMap((o) =>
+          o.Key ? [{ Key: o.Key }] : [],
+        );
+        if (Objects.length)
+          await client.send(
+            new DeleteObjectsCommand({ Bucket, Delete: { Objects } }),
+          );
+        ContinuationToken = page.NextContinuationToken;
+      } while (ContinuationToken);
+    } catch (e) {
+      this.logger.warn(`Could not delete private ${prefix}*: ${String(e)}`);
+    }
+  }
+
   /** Absolute path of a private key inside the private directory, or null when it escapes it. */
   static privatePath(key: string): string | null {
     const root = StorageService.privateDir();
@@ -362,8 +403,8 @@ export class StorageService {
 
   /**
    * not in legacy: a time-limited link to a private object for an outside
-   * service to fetch (VdoCipher's importUrl): presigned in r2 mode, else our
-   * signed `/files/` link. Never stored or shown to users.
+   * service to fetch: presigned in r2 mode, else our signed `/files/` link.
+   * Never stored or shown to users.
    */
   async presignPrivate(key: string, ttl: number): Promise<string> {
     const cfg = await this.r2Config();

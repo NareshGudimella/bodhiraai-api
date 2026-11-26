@@ -1,4 +1,4 @@
-import { Controller, Get, Inject, Logger, Param } from '@nestjs/common';
+import { Controller, Get, HttpException, Inject, Param } from '@nestjs/common';
 import { and, eq, or, sql } from 'drizzle-orm';
 import { CurrentUser } from '../common/decorators/auth.decorators';
 import { RateLimit } from '../common/decorators/rate-limit';
@@ -13,8 +13,16 @@ import { signedFileUrl } from '../storage/file-url';
 import { StudentService } from '../student/student.service';
 import { SUBSCRIPTION_INACTIVE_MESSAGE } from '../student/subscribed.guard';
 import { SubscriptionAccessService } from '../student/subscription-access.service';
-import { VdoCipherClient } from './vdocipher.client';
+import { filesBaseUrl } from '../storage/file-url';
+import { signHlsToken } from './hls-token';
 import { AdminContentService } from '../admin/admin-content.service';
+
+/** not in legacy: 409 with the code under both `code` (envelope) and `error` (contract); clients read either. */
+function videoState(message: string, code: string) {
+  const e = new ApiException(message, 409, code);
+  const body = e.getResponse() as object;
+  return new HttpException({ ...body, error: code }, 409);
+}
 
 const CANT_PLAY = "You can't play this lesson.";
 
@@ -35,19 +43,18 @@ const CANT_PLAY = "You can't play this lesson.";
  *  - Everyone else (super admins, parents, …): 403.
  *
  * 404 when the lesson doesn't exist or has no video; 409 `video_processing`
- * while an upload is being imported (not in legacy). VdoCipher videos get an
- * OTP watermarked with the viewer's name and phone/email; other videos a
+ * while an upload is being transcoded and `video_failed` when that gave up
+ * (not in legacy). Self-hosted videos get an encrypted-HLS master URL with a
+ * playback token (docs/video-hls-contract.md; the files are served by
+ * hls.controller.ts) and the viewer's email as watermark; other videos a
  * (signed) URL. 60 requests a minute per user.
  */
 @Controller('lessons')
 export class LessonPlaybackController {
-  private readonly logger = new Logger(LessonPlaybackController.name);
-
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly students: StudentService,
     private readonly access: SubscriptionAccessService,
-    private readonly vdo: VdoCipherClient,
     private readonly adminContent: AdminContentService,
   ) {}
 
@@ -80,46 +87,32 @@ export class LessonPlaybackController {
           : false;
     if (!allowed) throw new ApiException(CANT_PLAY, 403);
 
-    // not in legacy: an upload the worker is still sending to VdoCipher.
+    // not in legacy: an upload the worker is still transcoding, or gave up on.
     if (lesson.video_status === 'processing')
-      throw new ApiException(
+      throw videoState(
         'This video is still processing. Please try again in a few minutes.',
-        409,
         'video_processing',
       );
-    if (lesson.video_id) {
-      if (!(await this.vdo.configured()))
-        throw new ApiException('Video playback is not available.', 503);
-      // An admin's watermark is their name and email (not in legacy, 2026-11-01).
-      const contact =
-        user.role === (Role.Admin as string)
-          ? user.email || user.phone || ''
-          : user.phone || user.email || '';
-      const watermark = contact ? `${user.name} · ${contact}` : user.name;
-      try {
-        const { otp, playbackInfo, ttl } = await this.vdo.otp(
-          lesson.video_id,
-          watermark,
-        );
-        return ok(
-          {
-            provider: 'vdocipher',
-            otp,
-            playback_info: playbackInfo,
-            expires_in: ttl,
-          },
-          '',
-        );
-      } catch (e) {
-        this.logger.warn(`OTP for lesson ${id} failed: ${String(e)}`);
-        throw new ApiException('Video playback is not available.', 502);
-      }
-    }
-    if (lesson.type === 'video' && lesson.content_url)
+    if (lesson.video_status === 'failed')
+      throw videoState(
+        'This video could not be processed. Please upload it again.',
+        'video_failed',
+      );
+    if (lesson.video_hls_path) {
+      // Not a Bearer URL: native players can't send headers, so the token rides in `t`.
+      const { token, exp } = signHlsToken(lesson.id, user.id);
       return ok(
-        { provider: 'url', url: signedFileUrl(lesson.content_url) },
+        {
+          type: 'hls',
+          url: `${filesBaseUrl()}/api/v1/lessons/${lesson.id}/hls/master.m3u8?t=${token}`,
+          watermark: user.email || user.phone || user.name,
+          expires_at: new Date(exp * 1000).toISOString(),
+        },
         '',
       );
+    }
+    if (lesson.type === 'video' && lesson.content_url)
+      return ok({ type: 'url', url: signedFileUrl(lesson.content_url) }, '');
     throw new ApiException('This lesson has no video.', 404);
   }
 

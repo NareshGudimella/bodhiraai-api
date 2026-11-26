@@ -126,7 +126,7 @@ describe('JobsService', () => {
         value: { status: 'reconnecting' },
       });
       jest.spyOn(svc['logger'], 'error').mockImplementation(() => undefined);
-      expect(await svc.enqueue('video-import', {}, 'v-1')).toBe(false);
+      expect(await svc.enqueue('video-transcode', {}, 'v-1')).toBe(false);
       expect(add).not.toHaveBeenCalled();
     });
   });

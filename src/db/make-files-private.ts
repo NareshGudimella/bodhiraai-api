@@ -3,10 +3,8 @@
  * (contract: protected media, 2026-11-01).
  *
  * Moves files referenced by private columns out of the public buckets into the
- * private bucket and rewrites each value to `/files/<key>`; uploaded lesson
- * videos are copied to the private bucket too and imported into VdoCipher from
- * there (importUrl with a presigned link to the private copy), and get
- * `video_id`, with `content_url` cleared.
+ * private bucket and rewrites each value to `/files/<key>`, lesson videos
+ * included (they play as `url`; not transcoded here).
  *
  *   npm run files:make-private                      dry run: prints the plan, writes nothing
  *   npm run files:make-private -- --apply           copy, verify, rewrite, import, delete source
@@ -21,8 +19,7 @@
  * server's disk, never from R2 (docs/cutover-runbook.md §2 and §7).
  *
  * R2 buckets, keys and the public URL come from Integrations → Storage, and
- * the VdoCipher secret from Integrations → VdoCipher (2026-11-25; run
- * `npm run settings:import-env` first if they are still in the environment).
+ * (run `npm run settings:import-env` first if they are still in the environment).
  *
  * Sources a value can point at:
  *   <public URL or /uploads base>/<key>     this API's public uploads (uploads bucket / storage/uploads)
@@ -35,13 +32,12 @@
  * (a copy laid out like the legacy bucket). Anything else (external links) is
  * left alone. Invoices are never moved here.
  *
- * Re-runnable: `/files/` values and lessons with a video_id are skipped. A row
+ * Re-runnable: `/files/` values are skipped. A row
  * is rewritten only if its value is unchanged since it was read. A source
  * shared by several rows is deleted after the first one is rewritten; the
  * others find the verified private copy and are just rewritten (also on a
  * re-run after a failure). A source is never deleted when the copy fails
- * verification. Without a VdoCipher secret, lesson videos are moved to the
- * private bucket like other files.
+ * verification.
  *
  * In production (NODE_ENV=production) --apply also needs --confirm-production.
  */
@@ -53,15 +49,13 @@ loadEnv();
 import {
   CopyObjectCommand,
   DeleteObjectCommand,
-  GetObjectCommand,
   HeadObjectCommand,
   type S3Client,
 } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { and, eq, isNotNull, isNull } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import { copyFile, mkdir, stat, unlink } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
-import { FILES_PREFIX, isForbiddenKey, signFileKey } from '../storage/file-url';
+import { FILES_PREFIX, isForbiddenKey } from '../storage/file-url';
 import { IntegrationSettingsService } from '../integrations/integration-settings.service';
 import { isConfigured, type StorageConfig } from '../integrations/integrations';
 import { parseArgs } from './create-super-admin';
@@ -70,7 +64,6 @@ import {
   publicBaseOf,
   StorageService,
 } from '../storage/storage.service';
-import { VdoCipherClient } from '../video/vdocipher.client';
 import { createDb, type Db } from './db';
 import * as schema from './schema';
 
@@ -98,10 +91,6 @@ interface Row {
   column: Column;
   id: bigint;
   value: string;
-  /** lessons.type, for the video import. */
-  type?: string;
-  /** lessons.title, as the VdoCipher video title. */
-  title?: string;
 }
 
 const args = new Set(process.argv.slice(2));
@@ -240,20 +229,6 @@ async function deleteObject(loc: Location) {
   if (path) await unlink(path);
 }
 
-/**
- * A link VdoCipher can fetch the video from (6 h), to the private copy (made
- * and verified before this), so the public source can be deleted right away.
- */
-async function importLink(src: Source): Promise<string> {
-  if (r2)
-    return getSignedUrl(
-      client(),
-      new GetObjectCommand({ Bucket: privateStore(), Key: src.dest }),
-      { expiresIn: 6 * 3600 },
-    );
-  return signFileKey(src.dest, { ttl: 6 * 3600 });
-}
-
 async function readRows(db: Db): Promise<Row[]> {
   const rows: Row[] = [];
   const add = (column: Column, list: { id: bigint; v: string | null }[]) => {
@@ -278,25 +253,14 @@ async function readRows(db: Db): Promise<Row[]> {
       .where(isNotNull(schools.logo))
       .orderBy(schools.id),
   );
-  for (const l of await db
-    .select({
-      id: lessons.id,
-      v: lessons.content_url,
-      type: lessons.type,
-      title: lessons.title,
-    })
-    .from(lessons)
-    .where(and(isNotNull(lessons.content_url), isNull(lessons.video_id)))
-    .orderBy(lessons.id)) {
-    if (l.v)
-      rows.push({
-        column: 'lessons.content_url',
-        id: l.id,
-        value: l.v,
-        type: l.type,
-        title: l.title,
-      });
-  }
+  add(
+    'lessons.content_url',
+    await db
+      .select({ id: lessons.id, v: lessons.content_url })
+      .from(lessons)
+      .where(isNotNull(lessons.content_url))
+      .orderBy(lessons.id),
+  );
   add(
     'lessons.thumbnail',
     await db
@@ -373,10 +337,8 @@ async function main() {
     throw new Error(
       'Storage (R2) is not configured in Super Admin → Integrations.',
     );
-  const vdo = new VdoCipherClient(settings);
-  const useVdo = await vdo.configured();
   log(
-    `files:make-private (${APPLY ? 'APPLY' : 'dry run'}; storage ${r2 ? 'r2' : 'local'}; videos → ${useVdo ? 'VdoCipher' : 'private storage'})`,
+    `files:make-private (${APPLY ? 'APPLY' : 'dry run'}; storage ${r2 ? 'r2' : 'local'})`,
   );
   if (args.has('--delete-source'))
     log('--delete-source is no longer needed: --apply deletes each source.');
@@ -424,39 +386,6 @@ async function main() {
           log(`MISSING ${label}: ${row.value}`);
           continue;
         }
-      }
-      const isVideo =
-        row.column === 'lessons.content_url' && row.type === 'video';
-      if (isVideo && useVdo) {
-        log(
-          `${APPLY ? 'IMPORT' : 'would import'} ${label}: ${row.value} → VdoCipher`,
-        );
-        if (!APPLY) {
-          bump('video import');
-          continue;
-        }
-        try {
-          // VdoCipher fetches asynchronously, from the private copy (kept;
-          // remove it once the video shows as ready, if storage matters).
-          if (await exists(src)) await copyToPrivate(src);
-          const videoId = await vdo.importUrl(
-            await importLink(src),
-            row.title || `Lesson ${row.id}`,
-          );
-          if (
-            await rewrite(db, row, { video_id: videoId, content_url: null })
-          ) {
-            bump('video import');
-            await deleteSource(src, label);
-          } else {
-            await vdo.deleteBestEffort(videoId);
-            bump('changed meanwhile');
-          }
-        } catch (e) {
-          bump('failed');
-          log(`FAILED ${label}: ${String(e)}`);
-        }
-        continue;
       }
       const to = `${FILES_PREFIX}${src.dest}`;
       log(`${APPLY ? 'MOVE' : 'would move'} ${label}: ${row.value} → ${to}`);

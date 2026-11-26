@@ -63,7 +63,7 @@ export function lessonResource(
     slug: l.slug,
     type: l.type,
     // security: not in legacy: private files come out as signed links, and
-    // `playback` says whether to fetch a VdoCipher OTP (/lessons/:id/playback).
+    // `playback` says how to play the lesson (/lessons/:id/playback).
     thumbnail: signedFileUrl(l.thumbnail),
     content_url: signedFileUrl(l.content_url),
     playback: lessonPlayback(l),
