@@ -13,7 +13,8 @@
  *   storage   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET,
  *             R2_PUBLIC_URL, R2_PRIVATE_BUCKET, R2_LEGACY_BUCKET
  *   payments  BILLING_GATEWAY, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET,
- *             RAZORPAY_WEBHOOK_SECRET, STRIPE_SECRET, STRIPE_WEBHOOK_SECRET
+ *             RAZORPAY_WEBHOOK_SECRET, STRIPE_SECRET, STRIPE_WEBHOOK_SECRET,
+ *             BILLING_DEMO=1 (→ allow_demo)
  *   ai        ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_MAX_TOKENS, AI_DAILY_TOKEN_LIMIT
  *   vdocipher VDOCIPHER_API_SECRET, VDOCIPHER_VIDEO_ID, VDOCIPHER_PUBLIC_VIDEO_IDS, VDOCIPHER_OTP_TTL
  *   sms       MSG91_AUTH_KEY, MSG91_SENDER_ID, MSG91_TEMPLATE_ID (saved disabled)
@@ -69,6 +70,7 @@ export function envSettings(): Record<Provider | 'mail', Values> {
       razorpay_webhook_secret: e('RAZORPAY_WEBHOOK_SECRET'),
       stripe_secret: e('STRIPE_SECRET'),
       stripe_webhook_secret: e('STRIPE_WEBHOOK_SECRET'),
+      allow_demo: e('BILLING_DEMO') === '1' ? '1' : null,
     },
     ai: {
       api_key: e('ANTHROPIC_API_KEY'),

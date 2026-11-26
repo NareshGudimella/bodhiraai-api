@@ -10,6 +10,8 @@
  *
  *   npm run files:make-private                      dry run: prints the plan, writes nothing
  *   npm run files:make-private -- --apply           copy, verify, rewrite, import, delete source
+ *   --origin <url>  the legacy site origin of absolute legacy URLs (e.g. https://bodhiraai.com)
+ *   --dir <path>    local runs only: a copy of the legacy files laid out like the legacy bucket
  *
  * With --apply each source object is deleted as soon as its private copy is
  * verified (same size, and same ETag where both are single-part) and the row
@@ -23,13 +25,13 @@
  * `npm run settings:import-env` first if they are still in the environment).
  *
  * Sources a value can point at:
- *   <public URL or /uploads base>/<key>     this API's public uploads (uploads bucket / LOCAL_UPLOAD_DIR)
- *   /media/<path>, <LEGACY_FILES_ORIGIN>/media/<path>
+ *   <public URL or /uploads base>/<key>     this API's public uploads (uploads bucket / storage/uploads)
+ *   /media/<path>, <--origin>/media/<path>
  *                                           legacy uploads, copied to the legacy bucket under
  *                                           media/<path> (runbook §3); the private key is <path>
- *   /cloud/<path>, <LEGACY_FILES_ORIGIN>/cloud/<path>
+ *   /cloud/<path>, <--origin>/cloud/<path>
  *                                           legacy cloud images, legacy bucket cloud/<path>
- * Locally (STORAGE_DRIVER=local) legacy files are read from LEGACY_FILES_DIR
+ * Without R2 configured (local) legacy files are read from --dir
  * (a copy laid out like the legacy bucket). Anything else (external links) is
  * left alone. Invoices are never moved here.
  *
@@ -61,7 +63,8 @@ import { copyFile, mkdir, stat, unlink } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 import { FILES_PREFIX, isForbiddenKey, signFileKey } from '../storage/file-url';
 import { IntegrationSettingsService } from '../integrations/integration-settings.service';
-import type { StorageConfig } from '../integrations/integrations';
+import { isConfigured, type StorageConfig } from '../integrations/integrations';
+import { parseArgs } from './create-super-admin';
 import {
   createR2Client,
   publicBaseOf,
@@ -103,7 +106,9 @@ interface Row {
 
 const args = new Set(process.argv.slice(2));
 const APPLY = args.has('--apply');
-const r2 = process.env.STORAGE_DRIVER === 'r2';
+const flags = parseArgs(process.argv.slice(2));
+/** R2 when Integrations → Storage is configured (set by main()); STORAGE_DRIVER is a test override. */
+let r2 = false;
 let s3: S3Client | null = null;
 /** Integrations → Storage, loaded once by main() (not in legacy, 2026-11-25). */
 let storage: StorageConfig | null = null;
@@ -116,7 +121,7 @@ function publicBase(): string {
 }
 
 /** Private-bucket key for a stored value, with where to copy it from; null when it isn't ours. */
-export function sourceOf(value: string, env = process.env): Source | null {
+export function sourceOf(value: string, opts = flags): Source | null {
   if (value.startsWith(FILES_PREFIX)) return null;
   const base = publicBase();
   if (base && value.startsWith(`${base}/`)) {
@@ -128,7 +133,7 @@ export function sourceOf(value: string, env = process.env): Source | null {
     };
   }
   let path = value;
-  const legacyOrigin = env.LEGACY_FILES_ORIGIN?.replace(/\/+$/, '');
+  const legacyOrigin = opts.origin?.replace(/\/+$/, '');
   if (legacyOrigin && path.startsWith(`${legacyOrigin}/`))
     path = path.slice(legacyOrigin.length);
   const m = /^\/(media|cloud)\/(.+)$/.exec(path.split('?')[0]);
@@ -136,8 +141,8 @@ export function sourceOf(value: string, env = process.env): Source | null {
   const rest = decodeURIComponent(m[2]);
   const legacyStore = r2
     ? storage?.legacy_bucket || 'bodhira-legacy'
-    : env.LEGACY_FILES_DIR
-      ? resolve(env.LEGACY_FILES_DIR)
+    : opts.dir
+      ? resolve(opts.dir)
       : '';
   return {
     store: legacyStore,
@@ -360,6 +365,14 @@ async function main() {
   const db = createDb();
   const settings = new IntegrationSettingsService(db);
   storage = await settings.get('storage');
+  r2 =
+    process.env.STORAGE_DRIVER === 'r2' ||
+    (process.env.STORAGE_DRIVER !== 'local' &&
+      isConfigured('storage', storage));
+  if (!r2 && process.env.NODE_ENV === 'production')
+    throw new Error(
+      'Storage (R2) is not configured in Super Admin → Integrations.',
+    );
   const vdo = new VdoCipherClient(settings);
   const useVdo = await vdo.configured();
   log(

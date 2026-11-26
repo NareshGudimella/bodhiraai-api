@@ -16,7 +16,7 @@ import { runWorker } from './worker';
 
 async function bootstrap() {
   // security: not in legacy. Fail closed: production refuses to start without
-  // APP_SECRET (settings encryption, signed file links, the proxy secret) or FILES_BASE_URL.
+  // APP_SECRET (settings encryption, signed file links, the proxy secret) or WEB_URL.
   assertAppSecret();
   assertFileUrlConfig();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);

@@ -90,7 +90,7 @@ describe('Teacher assignments, grading and quizzes (e2e)', () => {
     privateDir = await mkdtemp(join(tmpdir(), 'bodhira-teacher-'));
     setEnv('STORAGE_DRIVER', 'local');
     setEnv('LOCAL_PRIVATE_DIR', privateDir);
-    setEnv('FILES_BASE_URL', 'http://files.e2e.test');
+    setEnv('PUBLIC_URL', 'http://files.e2e.test');
 
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],

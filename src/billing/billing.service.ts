@@ -6,6 +6,7 @@ import type { subscriptions, users } from '../db/types';
 import { PLAN_PRICING } from './billing.constants';
 import { IntegrationSettingsService } from '../integrations/integration-settings.service';
 import {
+  assertDemoBilling,
   RazorpayGateway,
   StripeGateway,
   type BillingGateway,
@@ -44,6 +45,11 @@ export class BillingService {
       this.db,
       await this.integrations.get('payments'),
     );
+  }
+
+  /** 503 unless demo billing is allowed (gateways.ts assertDemoBilling). */
+  async assertDemoBilling() {
+    assertDemoBilling(await this.integrations.get('payments'));
   }
 
   /** Real money is in play: the default gateway or Razorpay has keys. */

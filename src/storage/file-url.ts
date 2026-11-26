@@ -8,7 +8,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * The database stores private files as the relative value `/files/<key>`.
  * Responses turn that into
  *
- *     <FILES_BASE_URL>/files/<key>?exp=<unix seconds>&sig=<sig>
+ *     <site>/files/<key>?exp=<unix seconds>&sig=<sig>
  *
  * with sig = base64url(HMAC-SHA256(<file-urls key>, "<key>\n<exp>")). The
  * edge Worker (production) and this API (local, see files.handler.ts) check it.
@@ -27,7 +27,6 @@ export const FILES_PREFIX = '/files/';
 export const DEV_FILE_URL_SECRET =
   'bodhira-dev-file-url-secret-not-for-production';
 
-const DEFAULT_TTL = 1800;
 /** The server rejects links that expire more than 24 h ahead. */
 export const MAX_AHEAD = 86_400;
 
@@ -44,24 +43,23 @@ export function fileUrlSecret(env: Env = process.env): string {
 export function assertFileUrlConfig(env: Env = process.env) {
   if (!isProduction(env)) return;
   fileUrlSecret(env);
-  if (!env.FILES_BASE_URL?.trim())
-    throw new Error('FILES_BASE_URL must be set in production');
+  if (!env.WEB_URL?.trim())
+    throw new Error('WEB_URL must be set in production');
 }
 
-/** Link lifetime in seconds: FILE_URL_TTL (default 1800), kept within 60 s .. 24 h. */
-export function fileUrlTtl(env: Env = process.env): number {
-  const n = Number.parseInt(env.FILE_URL_TTL ?? '', 10);
-  if (!Number.isFinite(n) || n <= 0) return DEFAULT_TTL;
-  return Math.min(Math.max(n, 60), MAX_AHEAD);
-}
+/** Link lifetime in seconds. */
+export const FILE_URL_TTL = 1800;
 
-/** Origin the signed links point at (no trailing slash). */
+/**
+ * Origin the signed links point at (no trailing slash): the site (WEB_URL) in
+ * production, where the edge Worker serves /files/*; this API locally
+ * (files.handler.ts; PUBLIC_URL is a test override).
+ */
 export function filesBaseUrl(env: Env = process.env): string {
-  const base =
-    env.FILES_BASE_URL?.trim() ||
-    env.PUBLIC_URL?.trim() ||
-    `http://localhost:${env.PORT ?? 4000}`;
-  return base.replace(/\/+$/, '');
+  const base = isProduction(env)
+    ? (env.WEB_URL ?? '')
+    : env.PUBLIC_URL?.trim() || `http://localhost:${env.PORT || 4000}`;
+  return base.trim().replace(/\/+$/, '');
 }
 
 /**
@@ -106,7 +104,7 @@ export function signFileKey(
   if (isForbiddenKey(key)) throw new Error('This file key cannot be signed');
   const env = opts.env ?? process.env;
   const now = Math.floor((opts.now ?? Date.now()) / 1000);
-  const exp = now + (opts.ttl ?? fileUrlTtl(env));
+  const exp = now + (opts.ttl ?? FILE_URL_TTL);
   const sig = hmac(key, exp, fileUrlSecret(env));
   return `${filesBaseUrl(env)}${FILES_PREFIX}${encodeKey(key)}?exp=${exp}&sig=${sig}`;
 }

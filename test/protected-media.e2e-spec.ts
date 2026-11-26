@@ -191,8 +191,7 @@ describe('Protected media (e2e)', () => {
 
     privateDir = await mkdtemp(join(tmpdir(), 'bodhira-private-'));
     setEnv('LOCAL_PRIVATE_DIR', privateDir);
-    setEnv('FILES_BASE_URL', 'http://files.e2e.test');
-    setEnv('FILE_URL_TTL', '1800');
+    setEnv('PUBLIC_URL', 'http://files.e2e.test');
     setEnv('VDOCIPHER_API_BASE', stubBase);
     setEnv('STORAGE_DRIVER', 'local');
 

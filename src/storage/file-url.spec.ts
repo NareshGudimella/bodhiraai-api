@@ -6,7 +6,7 @@ import {
   DEV_FILE_URL_SECRET,
   encodeKey,
   fileUrlSecret,
-  fileUrlTtl,
+  filesBaseUrl,
   ForgedFileUrl,
   isForbiddenKey,
   signedFileUrl,
@@ -21,8 +21,7 @@ const SECRET = derivedKey('file-urls', { APP_SECRET })!;
 const env = {
   NODE_ENV: 'test',
   APP_SECRET,
-  FILES_BASE_URL: 'https://site.test/',
-  FILE_URL_TTL: '1800',
+  PUBLIC_URL: 'https://site.test/',
 };
 const NOW = 1_800_000_000_000; // ms
 const nowS = NOW / 1000;
@@ -195,18 +194,18 @@ describe('signed file links (security: not in legacy)', () => {
     ).toThrow(/32 bytes/);
     expect(() =>
       signFileKey('a/b.png', {
-        env: { NODE_ENV: 'production', FILES_BASE_URL: 'https://x' },
+        env: { NODE_ENV: 'production', WEB_URL: 'https://x' },
       }),
     ).toThrow(/APP_SECRET/);
     expect(() => assertFileUrlConfig({ NODE_ENV: 'production' })).toThrow();
     expect(() =>
       assertFileUrlConfig({ NODE_ENV: 'production', APP_SECRET }),
-    ).toThrow(/FILES_BASE_URL/);
+    ).toThrow(/WEB_URL/);
     expect(() =>
       assertFileUrlConfig({
         NODE_ENV: 'production',
         APP_SECRET,
-        FILES_BASE_URL: 'https://site.test',
+        WEB_URL: 'https://site.test',
       }),
     ).not.toThrow();
     expect(() =>
@@ -214,11 +213,16 @@ describe('signed file links (security: not in legacy)', () => {
     ).not.toThrow();
   });
 
-  it('reads FILE_URL_TTL with a default and bounds', () => {
-    expect(fileUrlTtl({})).toBe(1800);
-    expect(fileUrlTtl({ FILE_URL_TTL: 'abc' })).toBe(1800);
-    expect(fileUrlTtl({ FILE_URL_TTL: '600' })).toBe(600);
-    expect(fileUrlTtl({ FILE_URL_TTL: '5' })).toBe(60);
-    expect(fileUrlTtl({ FILE_URL_TTL: '999999' })).toBe(86_400);
+  it('points links at the site in production, at this API elsewhere', () => {
+    expect(
+      filesBaseUrl({
+        NODE_ENV: 'production',
+        WEB_URL: 'https://bodhiraai.com/',
+        PUBLIC_URL: 'http://x',
+      }),
+    ).toBe('https://bodhiraai.com');
+    expect(filesBaseUrl({ NODE_ENV: 'development', PORT: '4000' })).toBe(
+      'http://localhost:4000',
+    );
   });
 });

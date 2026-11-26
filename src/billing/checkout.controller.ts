@@ -48,7 +48,6 @@ import {
   pricePaiseFor,
 } from './billing.constants';
 import { BillingService, daysRemaining, isInTrial } from './billing.service';
-import { assertDemoBilling } from './gateways';
 import { InvoiceService } from './invoice.service';
 
 type Data = Record<string, unknown>;
@@ -142,8 +141,8 @@ export class CheckoutController {
       );
     }
 
-    // security: not in legacy: no payment is taken here, so production refuses unless BILLING_DEMO=1.
-    assertDemoBilling();
+    // security: not in legacy: no payment is taken here, so production refuses unless the panel allows demo checkout.
+    await this.billing.assertDemoBilling();
     const [sub] = await this.db
       .insert(subscriptionsTable)
       .values({
@@ -202,7 +201,7 @@ export class CheckoutController {
     const tax = phpRound((amount * TAX_RATE_BPS) / 10000);
     const gateway = await this.billing.razorpay();
     const configured = gateway.isConfigured();
-    if (!configured) assertDemoBilling(); // security: not in legacy
+    if (!configured) await this.billing.assertDemoBilling(); // security: not in legacy
     const orderId = configured
       ? await this.pendingOrder(sub, cycle, amount + tax)
       : null;
@@ -369,8 +368,8 @@ export class CheckoutController {
           'payment_unavailable',
         );
       }
-      // security: not in legacy: demo completion (no payment) needs BILLING_DEMO=1 in production.
-      assertDemoBilling();
+      // security: not in legacy: demo completion (no payment) needs allow_demo in production.
+      await this.billing.assertDemoBilling();
       return false;
     }
     const orderId = data.razorpay_order_id;

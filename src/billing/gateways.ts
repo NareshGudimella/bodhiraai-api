@@ -36,14 +36,14 @@ export function envString(name: string): string {
 /**
  * security: not in legacy. Demo billing (plans activate with no payment when
  * no gateway is configured under Integrations → Payments) is off in production
- * unless BILLING_DEMO=1 (a deliberate env-only safety switch).
+ * unless "Allow demo checkout in production" (`allow_demo`) is on in the panel.
  */
-export const demoBillingAllowed = () =>
-  process.env.NODE_ENV !== 'production' || process.env.BILLING_DEMO === '1';
+export const demoBillingAllowed = (cfg: Pick<PaymentsConfig, 'allow_demo'>) =>
+  process.env.NODE_ENV !== 'production' || cfg.allow_demo === true;
 
 /** 503 when a request would need demo billing and it isn't allowed. */
-export function assertDemoBilling() {
-  if (!demoBillingAllowed()) {
+export function assertDemoBilling(cfg: Pick<PaymentsConfig, 'allow_demo'>) {
+  if (!demoBillingAllowed(cfg)) {
     throw new ApiException(
       'Online payment is not available right now.',
       503,
@@ -277,7 +277,7 @@ export class RazorpayGateway extends Gateway {
     amountPaise: number,
     currency = 'INR',
   ): Promise<CheckoutPayload> {
-    if (!this.isConfigured()) assertDemoBilling();
+    if (!this.isConfigured()) assertDemoBilling(this.cfg);
     const payment = await this.pendingPayment(
       school,
       plan,
@@ -437,7 +437,7 @@ export class StripeGateway extends Gateway {
     amountPaise: number,
     currency = 'INR',
   ): Promise<CheckoutPayload> {
-    if (!this.isConfigured()) assertDemoBilling();
+    if (!this.isConfigured()) assertDemoBilling(this.cfg);
     const payment = await this.pendingPayment(
       school,
       plan,

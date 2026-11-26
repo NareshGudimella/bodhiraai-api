@@ -621,11 +621,25 @@ export class SuperService {
         latency_ms: null,
       });
     }
-    if (this.storage.driver === 'r2') {
+    let r2: Awaited<ReturnType<StorageService['r2Config']>> = null;
+    let storageError: string | null = null;
+    try {
+      r2 = await this.storage.r2Config();
+    } catch (e) {
+      storageError = e instanceof Error ? e.message : String(e);
+    }
+    if (storageError) {
+      checks.push({
+        name: 'Storage',
+        status: 'down',
+        detail: storageError,
+        latency_ms: null,
+      });
+    } else if (r2) {
       checks.push({
         name: 'Storage',
         status: 'healthy',
-        detail: `R2 bucket ${(await this.storage.r2Config())?.bucket ?? ''}`,
+        detail: `R2 bucket ${r2.bucket ?? ''}`,
         latency_ms: null,
       });
     } else {
@@ -658,7 +672,7 @@ export class SuperService {
       checks,
       environment: process.env.NODE_ENV ?? 'production',
       node_version: process.version,
-      app_url: process.env.PUBLIC_URL ?? null,
+      app_url: process.env.WEB_URL ?? null,
       checked_at: iso8601(new Date()),
     };
   }

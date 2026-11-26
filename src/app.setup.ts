@@ -30,7 +30,8 @@ export function configureApp(app: NestExpressApplication) {
   app.use('/webhooks', raw({ type: () => true, limit: '1mb' }));
   // Uploaded files (local driver) are embedded by the web app on another origin.
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-  if (process.env.STORAGE_DRIVER !== 'r2') {
+  // Local disk is development only: production stores in R2 (StorageService).
+  if (process.env.NODE_ENV !== 'production') {
     app.useStaticAssets(StorageService.localDir(), {
       prefix: '/uploads',
       dotfiles: 'deny',

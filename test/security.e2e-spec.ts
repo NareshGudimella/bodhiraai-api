@@ -610,12 +610,11 @@ describe('Security hardening (e2e)', () => {
 
   // ---------------------------------------------------------------- 6
   describe('billing', () => {
-    it('refuses demo checkout in production unless BILLING_DEMO=1', async () => {
+    it('refuses demo checkout in production unless the panel allows it', async () => {
       const u = await mkUser('student');
       const t = await tokenFor(u);
       settings.reset('payments'); // no gateway configured
       setEnv('NODE_ENV', 'production');
-      setEnv('BILLING_DEMO', undefined);
       const plan = { plan: 'individual_basic', cycle: 'monthly' };
       const refused = await http()
         .post('/api/v1/billing/paywall/checkout')
@@ -629,13 +628,13 @@ describe('Security hardening (e2e)', () => {
         }),
       ).toBeUndefined();
 
-      setEnv('BILLING_DEMO', '1');
+      settings.set('payments', { allow_demo: true });
       await http()
         .post('/api/v1/billing/paywall/checkout')
         .set(bearer(t))
         .send(plan)
         .expect(201);
-      setEnv('BILLING_DEMO', undefined);
+      settings.reset('payments');
       setEnv('NODE_ENV', 'test');
     });
 

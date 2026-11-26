@@ -138,7 +138,7 @@ describe('Background jobs with Redis (e2e)', () => {
     setEnv('BULLMQ_PREFIX', PREFIX);
     setEnv('LOCAL_PRIVATE_DIR', privateDir);
     setEnv('STORAGE_DRIVER', 'local');
-    setEnv('FILES_BASE_URL', 'http://files.e2e.test');
+    setEnv('PUBLIC_URL', 'http://files.e2e.test');
     setEnv('VDOCIPHER_API_BASE', stubBase);
     setEnv('APP_SECRET', undefined);
 

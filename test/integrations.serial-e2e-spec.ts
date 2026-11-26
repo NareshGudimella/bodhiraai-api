@@ -184,7 +184,7 @@ describe('Super admin integrations (e2e)', () => {
       provider: 'payments',
       configured: false,
       updated_at: null,
-      values: { gateway: 'none', razorpay_key_id: null },
+      values: { gateway: 'none', razorpay_key_id: null, allow_demo: false },
       secrets: {
         razorpay_key_secret: false,
         razorpay_webhook_secret: false,

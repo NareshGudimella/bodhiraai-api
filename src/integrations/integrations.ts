@@ -57,6 +57,12 @@ export const PROVIDERS = {
     razorpay_webhook_secret: secret(),
     stripe_secret: secret(),
     stripe_webhook_secret: secret(),
+    /** not in legacy: demo checkout (no payment) is refused in production unless this is on. */
+    allow_demo: {
+      type: 'bool',
+      rules: ['nullable', 'boolean'],
+      default: false,
+    },
   },
   /** The AI tutor (Anthropic). */
   ai: {
@@ -123,6 +129,7 @@ export interface PaymentsConfig {
   razorpay_webhook_secret: S;
   stripe_secret: S;
   stripe_webhook_secret: S;
+  allow_demo: boolean;
 }
 export interface AiConfig {
   api_key: S;
