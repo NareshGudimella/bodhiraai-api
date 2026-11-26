@@ -158,15 +158,19 @@ The script is a draft and hasn't been run against AWS yet. CI (`.github/workflow
 - **Migration 0007 (Bodhira Direct, the default school)** carries a data step that runs with `npm run db:migrate`: on a database with users it creates the school and moves the students with no school (and parents whose children are all there) into it. It is **not** backward-compatible: code from before it would treat the moved students as members of a free, active school (no paywall) until the new version is live. Before cut-over that doesn't matter (no production traffic); on a live system, keep the gap between the migration and `eb deploy` short. On an empty database it does nothing; after a data copy run `npm run db:direct-school` (runbook step 5b).
 - **Migrations must be backward-compatible** with the code already running, because a rolling deploy runs old and new code side by side. Schema changes go through `npm run db:generate`, and you review the generated SQL (see [docs/drizzle.md](docs/drizzle.md)).
 
-**Worker by GitHub Actions** (`.github/workflows/deploy-worker.yml`, runs only in the live repo `aveniqinnovations/ba-api`; other copies skip it): after CI passes on a push to `main` (or by hand: Actions → Deploy worker → Run workflow), GitHub builds the app, copies the build to `DEPLOY_PATH/releases/<commit>` over SSH, installs the production dependencies there (native modules must match the host), points `DEPLOY_PATH/current` at it and restarts the PM2 app (`scripts/deploy-worker.sh`, the same step as 4 above). Set up once:
+**By GitHub Actions** (`.github/workflows/deploy.yml`, runs only in the live repo `aveniqinnovations/ba-api`; other copies skip it): after CI passes on a push to `main` (or by hand: Actions → Deploy → Run workflow), one job builds the app, runs the migrations against Supabase, deploys the worker over SSH (`scripts/deploy-worker.sh`: the build to `DEPLOY_PATH/releases/<commit>`, `npm ci --omit=dev` there, PM2 restart), then the web API to Beanstalk (`scripts/deploy-eb.sh`: an S3 bundle, a new application version, a rolling update, and a wait until the environment is Ready and on that version; Beanstalk's recent events are printed either way). AWS access is OIDC (an IAM role that trusts only this repo's `main`), so no AWS keys are stored in GitHub. Set up once:
 
 1. On the worker host, as the deploy user: `ssh-keygen -t ed25519 -f bodhira-deploy -N ''`, append `bodhira-deploy.pub` to `~/.ssh/authorized_keys`, copy the private key into GitHub (below), then delete both files. Put the app's `.env` in `DEPLOY_PATH` (owned by the deploy user, `chmod 600`).
 2. The host's security group allows SSH (22) from GitHub's runners. Their IPs change; either allow 0.0.0.0/0 with key-only login (`PasswordAuthentication no`), or use a self-hosted runner / bastion inside the VPC.
 3. GitHub → Settings → Environments → `production`:
    - secret `WORKER_SSH_KEY` (the private key);
    - variables `WORKER_SSH_HOST`, `WORKER_SSH_USER`, `WORKER_SSH_KNOWN_HOSTS` (`ssh-keyscan -t ed25519 <host>`), `DEPLOY_PATH` (e.g. `/opt/bodhiraai-api`), optional `WORKER_SSH_PORT`.
+   - secret `MIGRATE_DATABASE_URL` (the session pooler URL, port 5432);
+   - variables `AWS_ROLE_ARN`, `AWS_REGION`, `EB_APPLICATION`, `EB_ENVIRONMENT`.
    - Optional: add yourself as a required reviewer to approve each deploy.
-4. Then deploy the API with `SKIP_WORKER=1 scripts/deploy.sh`. **Migrations still run from `scripts/deploy.sh`**: a worker change that needs a new migration must wait for it (run the deploy script first, or approve the worker deploy after it).
+4. AWS (once): IAM → Identity providers → OpenID Connect `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`; a role trusting it for `repo:aveniqinnovations/ba-api:environment:production` with `AdministratorAccess-AWSElasticBeanstalk` (it also writes the bundle to Beanstalk's S3 bucket). Its ARN is `AWS_ROLE_ARN`.
+
+`scripts/deploy.sh` stays as the manual fallback (same order, from your machine with the EB CLI).
 
 ## 7. Operations
 

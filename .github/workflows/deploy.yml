@@ -1,21 +1,21 @@
-# Deploys the background-job worker to the worker host over SSH (DEPLOY.md §4, §6)
-# after CI passes on main, or by hand (Actions → Deploy worker → Run workflow).
-# GitHub builds the app; the build (dist/, assets/, package files, PM2 config) is
-# copied to DEPLOY_PATH/releases/<commit>, production dependencies are installed
-# there (native modules must match the host), `current` points at it and the PM2
-# app restarts. The web API still deploys to Elastic Beanstalk with
-# scripts/deploy.sh (SKIP_WORKER=1 there once this workflow owns the worker).
+# Production deploy (DEPLOY.md §6): after CI passes on main, or by hand
+# (Actions → Deploy → Run workflow). One job, in this order:
+#   1. build;
+#   2. migrations against Supabase (a failure deploys nothing);
+#   3. the background-job worker over SSH (PM2), before the API, so the new
+#      worker runs jobs from old and new API instances alike;
+#   4. the web API to Elastic Beanstalk (S3 bundle → application version →
+#      rolling update), then waits until the environment is Ready and on this version.
+# Runs only in aveniqinnovations/ba-api (the live repo). AWS access is OIDC: no keys
+# stored here; the role trusts this repo's main branch only.
 #
-# Runs only in aveniqinnovations/ba-api (the live repo).
 # GitHub → Settings → Environments → production:
-#   secret   WORKER_SSH_KEY          the deploy user's private key (deploy-only, ed25519)
-#   variable WORKER_SSH_HOST         the worker host's public IP / DNS
-#   variable WORKER_SSH_USER         the deploy user that runs PM2 (e.g. ec2-user)
-#   variable WORKER_SSH_KNOWN_HOSTS  output of `ssh-keyscan -t ed25519 <host>` (pins the host key)
-#   variable WORKER_SSH_PORT         optional, default 22
-#   variable DEPLOY_PATH             the app's folder on the host (e.g. /opt/bodhiraai-api);
-#                                    it must hold the .env, and the deploy user must own it
-name: Deploy worker
+#   secret   MIGRATE_DATABASE_URL    Supabase session pooler (5432) + ?uselibpqcompat=true&sslmode=require
+#   secret   WORKER_SSH_KEY          the worker deploy user's private key (ed25519)
+#   variable WORKER_SSH_HOST, WORKER_SSH_USER, WORKER_SSH_KNOWN_HOSTS, WORKER_SSH_PORT (optional, 22)
+#   variable DEPLOY_PATH             the worker's app folder (holds its .env)
+#   variable AWS_ROLE_ARN, AWS_REGION, EB_APPLICATION, EB_ENVIRONMENT
+name: Deploy
 on:
   workflow_run:
     workflows: [CI]
@@ -25,11 +25,12 @@ on:
 
 # One deploy at a time; a newer one waits instead of cancelling a deploy halfway.
 concurrency:
-  group: deploy-worker
+  group: deploy
   cancel-in-progress: false
 
 permissions:
   contents: read
+  id-token: write # OIDC token for the AWS role
 
 jobs:
   deploy:
@@ -40,12 +41,14 @@ jobs:
        (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
     runs-on: ubuntu-24.04
     environment: production
-    timeout-minutes: 20
+    timeout-minutes: 45
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           # The commit CI checked (workflow_run), or the chosen branch (manual run).
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ env.SHA }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -53,7 +56,14 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-      - name: SSH setup
+      - name: Migrations (Supabase)
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATE_DATABASE_URL }}
+        run: |
+          [ -n "$DATABASE_URL" ] || { echo "::error::Missing MIGRATE_DATABASE_URL: set it in the production environment"; exit 1; }
+          npm run db:migrate
+
+      - name: SSH setup (worker)
         env:
           KEY: ${{ secrets.WORKER_SSH_KEY }}
           KNOWN_HOSTS: ${{ vars.WORKER_SSH_KNOWN_HOSTS }}
@@ -78,12 +88,23 @@ jobs:
             ConnectTimeout 15
           CONF
 
-      - name: Copy build and restart PM2
+      - name: Worker (PM2)
         env:
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
         run: |
           [ -n "$DEPLOY_PATH" ] || { echo "::error::Missing DEPLOY_PATH: set it in the production environment"; exit 1; }
-          scripts/deploy-worker.sh worker "$(git rev-parse HEAD)"
+          scripts/deploy-worker.sh worker "$SHA"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Web API (Elastic Beanstalk)
+        env:
+          APP: ${{ vars.EB_APPLICATION }}
+          ENV_NAME: ${{ vars.EB_ENVIRONMENT }}
+        run: scripts/deploy-eb.sh "$APP" "$ENV_NAME" "${SHA:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
       - name: Remove key
         if: always()

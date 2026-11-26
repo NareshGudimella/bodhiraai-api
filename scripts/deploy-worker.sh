@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploys the built worker (dist/) to the worker host over SSH and restarts it
 # under PM2 (DEPLOY.md §4, §6). Used by scripts/deploy.sh and by the GitHub
-# Actions workflow .github/workflows/deploy-worker.yml.
+# Actions workflow .github/workflows/deploy.yml.
 #
 #   scripts/deploy-worker.sh <ssh-destination> <commit-sha>
 #
