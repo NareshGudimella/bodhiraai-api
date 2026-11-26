@@ -70,6 +70,9 @@ diagnose() {
   echo "== Health causes"
   aws elasticbeanstalk describe-environment-health --environment-name "$ENV_NAME" \
     --attribute-names Causes HealthStatus --query 'Causes' --output text || true
+  echo "== Beanstalk engine log (eb-engine.log, last 15 min: errors and the lines before them)"
+  aws logs tail "/aws/elasticbeanstalk/$ENV_NAME/var/log/eb-engine.log" --since 15m --format short 2>&1 \
+    | grep -iE -B3 "error|fail|emerg|npm ERR" | tail -n 40 || true
   echo "== App output (web.stdout.log, last 15 min)"
   aws logs tail "/aws/elasticbeanstalk/$ENV_NAME/var/log/web.stdout.log" --since 15m --format short 2>&1 | tail -n 40 || true
 }
