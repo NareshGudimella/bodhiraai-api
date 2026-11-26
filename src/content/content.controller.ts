@@ -32,7 +32,10 @@ import {
 import type { lessons, users } from '../db/types';
 import { fileKeyOf, ForgedFileUrl, unsignFileUrl } from '../storage/file-url';
 import { strRandom } from '../storage/laravel-str';
-import { StorageService } from '../storage/storage.service';
+import {
+  StorageService,
+  VIDEO_IMPORTS_PREFIX,
+} from '../storage/storage.service';
 import { checkUpload, type IncomingFile } from '../storage/upload-rules';
 import {
   storeOrReject,
@@ -288,7 +291,7 @@ export class ContentController {
       // not in legacy: kept privately until the `video-import` job has sent
       // it to VdoCipher (the caller starts it once the lesson row is saved).
       const url = await storeOrReject('content_file', () =>
-        this.storage.store(file, 'video', `video-imports/${folder}`, {
+        this.storage.store(file, 'video', `${VIDEO_IMPORTS_PREFIX}${folder}`, {
           private: true,
         }),
       );

@@ -1,3 +1,4 @@
+import { privateBucketFor, VIDEO_IMPORTS_PREFIX } from './storage.service';
 import { strSlug } from './laravel-str';
 import { checkUpload, sniff, UploadRejected } from './upload-rules';
 
@@ -57,5 +58,38 @@ describe('upload rules (FileUploadService::validate)', () => {
     expect(
       checkUpload(file('notes.pdf', 'plain words'), 'doc').contentType,
     ).toBe('text/plain; charset=utf-8');
+  });
+});
+
+describe('privateBucketFor (not in legacy)', () => {
+  const cfg = {
+    account_id: 'a',
+    access_key_id: 'k',
+    secret_access_key: 's',
+    bucket: 'pub',
+    public_url: 'https://cdn.test',
+    private_bucket: 'priv',
+    video_bucket: 'vids',
+    legacy_bucket: null,
+  };
+
+  it('sends video uploads to the video bucket, everything else private', () => {
+    expect(
+      privateBucketFor(cfg, `${VIDEO_IMPORTS_PREFIX}lessons/7/a.mp4`),
+    ).toBe('vids');
+    expect(privateBucketFor(cfg, 'invoices/INV-1.pdf')).toBe('priv');
+    expect(privateBucketFor(cfg, 'submissions/3/work.pdf')).toBe('priv');
+  });
+
+  it('uses the private bucket for videos when no video bucket is set; never the public one', () => {
+    expect(
+      privateBucketFor(
+        { ...cfg, video_bucket: null },
+        `${VIDEO_IMPORTS_PREFIX}x.mp4`,
+      ),
+    ).toBe('priv');
+    expect(() =>
+      privateBucketFor({ ...cfg, private_bucket: null }, 'invoices/x.pdf'),
+    ).toThrow(/private R2 bucket/);
   });
 });

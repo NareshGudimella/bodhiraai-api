@@ -32,6 +32,10 @@ export const PROVIDERS = {
     bucket: { rules: BUCKET },
     public_url: { rules: ['nullable', 'url', 'max:190'] },
     private_bucket: { rules: [...BUCKET, 'different:bucket'] },
+    /** Optional: lesson video uploads waiting for VdoCipher; else the private bucket. */
+    video_bucket: {
+      rules: [...BUCKET, 'different:bucket', 'different:private_bucket'],
+    },
     legacy_bucket: { rules: BUCKET },
   },
   /** MSG91 OTP API: phone sign-in codes. */
@@ -103,6 +107,7 @@ export interface StorageConfig {
   bucket: S;
   public_url: S;
   private_bucket: S;
+  video_bucket: S;
   legacy_bucket: S;
 }
 export interface SmsConfig {

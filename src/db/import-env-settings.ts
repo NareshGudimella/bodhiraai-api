@@ -51,6 +51,7 @@ export function envSettings(): Record<Provider | 'mail', Values> {
       bucket: e('R2_BUCKET'),
       public_url: e('R2_PUBLIC_URL'),
       private_bucket: e('R2_PRIVATE_BUCKET'),
+      video_bucket: e('R2_VIDEO_BUCKET'),
       legacy_bucket: e('R2_LEGACY_BUCKET'),
     },
     sms: {

@@ -78,6 +78,23 @@ export interface StoreOptions {
  * layout and the call returns `/files/<key>`, which responses sign
  * (file-url.ts). Invoices share the bucket but are never signable.
  */
+/** Key prefix of lesson videos waiting for their `video-import` job (content.controller). */
+export const VIDEO_IMPORTS_PREFIX = 'video-imports/';
+
+/**
+ * not in legacy: the R2 bucket of a private key. Lesson video uploads go to
+ * `video_bucket` when one is set (private, only VdoCipher fetches them by a
+ * presigned link); everything else private to `private_bucket`. Never falls
+ * back to the public bucket: keys like invoice numbers are guessable.
+ */
+export function privateBucketFor(cfg: StorageConfig, key: string): string {
+  if (key.startsWith(VIDEO_IMPORTS_PREFIX) && cfg.video_bucket)
+    return cfg.video_bucket;
+  if (!cfg.private_bucket)
+    throw new Error('The private R2 bucket is not configured');
+  return cfg.private_bucket;
+}
+
 @Injectable()
 export class StorageService {
   private readonly logger = new Logger(StorageService.name);
@@ -108,11 +125,8 @@ export class StorageService {
     return resolve(process.env.LOCAL_PRIVATE_DIR ?? 'storage/private');
   }
 
-  private privateBucket(cfg: StorageConfig) {
-    // Never fall back to the public bucket: keys like invoice numbers are guessable.
-    if (!cfg.private_bucket)
-      throw new Error('The private R2 bucket is not configured');
-    return cfg.private_bucket;
+  private privateBucket(cfg: StorageConfig, key: string) {
+    return privateBucketFor(cfg, key);
   }
 
   /** The S3 client for these settings; rebuilt when they change. */
@@ -141,9 +155,12 @@ export class StorageService {
    */
   async testBuckets(): Promise<string[]> {
     const { cfg, s3 } = await this.r2();
-    const buckets = [cfg.bucket, cfg.private_bucket, cfg.legacy_bucket].filter(
-      (b): b is string => !!b,
-    );
+    const buckets = [
+      cfg.bucket,
+      cfg.private_bucket,
+      cfg.video_bucket,
+      cfg.legacy_bucket,
+    ].filter((b): b is string => !!b);
     if (!buckets.length) throw new Error('No bucket is configured.');
     for (const Bucket of buckets) {
       try {
@@ -281,7 +298,7 @@ export class StorageService {
         const { cfg, s3 } = await this.r2();
         await s3.send(
           new DeleteObjectCommand({
-            Bucket: this.privateBucket(cfg),
+            Bucket: this.privateBucket(cfg, key),
             Key: key,
           }),
         );
@@ -307,7 +324,7 @@ export class StorageService {
       const { cfg, s3 } = await this.r2();
       await s3.send(
         new PutObjectCommand({
-          Bucket: this.privateBucket(cfg),
+          Bucket: this.privateBucket(cfg, key),
           Key: key,
           Body: bytes,
           ContentType: contentType,
@@ -330,7 +347,10 @@ export class StorageService {
       const { cfg, s3 } = await this.r2();
       return getSignedUrl(
         s3,
-        new GetObjectCommand({ Bucket: this.privateBucket(cfg), Key: key }),
+        new GetObjectCommand({
+          Bucket: this.privateBucket(cfg, key),
+          Key: key,
+        }),
         { expiresIn: ttl },
       );
     }
@@ -343,7 +363,10 @@ export class StorageService {
       if (this.driver === 'r2') {
         const { cfg, s3 } = await this.r2();
         const res = await s3.send(
-          new GetObjectCommand({ Bucket: this.privateBucket(cfg), Key: key }),
+          new GetObjectCommand({
+            Bucket: this.privateBucket(cfg, key),
+            Key: key,
+          }),
         );
         return res.Body
           ? Buffer.from(await res.Body.transformToByteArray())
