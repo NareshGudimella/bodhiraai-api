@@ -57,9 +57,19 @@ events() {
   aws elasticbeanstalk describe-events --environment-name "$ENV_NAME" --start-time "$START" \
     --query 'Events[].[EventDate,Severity,Message]' --output text | sort | tail -n 25
 }
+# Why an environment is unhealthy: Beanstalk's causes and the app's last output
+# (the app logs no secrets; best effort, needs logs:FilterLogEvents).
+diagnose() {
+  echo "== Health causes"
+  aws elasticbeanstalk describe-environment-health --environment-name "$ENV_NAME" \
+    --attribute-names Causes HealthStatus --query 'Causes' --output text || true
+  echo "== App output (web.stdout.log, last 15 min)"
+  aws logs tail "/aws/elasticbeanstalk/$ENV_NAME/var/log/web.stdout.log" --since 15m --format short 2>&1 | tail -n 40 || true
+}
 if [ "$STATUS" != Ready ] || [ "$VERSION" != "$LABEL" ] || [ "$HEALTH" = Red ]; then
   echo "::error::Beanstalk deploy failed: status=$STATUS health=$HEALTH version=$VERSION (expected $LABEL)"
   events
+  diagnose
   exit 1
 fi
 events
