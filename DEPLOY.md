@@ -17,7 +17,7 @@ How the API fits with Cloudflare and the switch from legacy are in [../docs/cuto
 | Elastic Beanstalk | Node.js 22 platform on Amazon Linux 2023. Application Load Balancer; auto scaling 1–10 on CPU | Config is in `.ebextensions/` and `.platform/`. Each instance runs `node dist/main.js` (`Procfile`) behind Beanstalk's Nginx, on port 8080 |
 | Supabase | PostgreSQL 17 (Pro plan recommended for daily backups and point-in-time recovery). The app connects through the **transaction pooler** (port 6543); migrations use the **session pooler** (port 5432) | Pick a region close to the Beanstalk region. Use the pooler host, not `db.<ref>.supabase.co`, which is IPv6-only |
 | Worker host (EC2) | Amazon Linux 2023, in the Beanstalk VPC: Redis with AOF persistence, and the BullMQ worker (the same build with `APP_TYPE=WORKER`, under PM2) | Section 4. Redis holds the shared rate-limit counters and the job queue. The worker runs the jobs the API enqueues: emails (password reset), invoice PDF and email after payment, notification rows, VdoCipher video imports and deletes. Not in legacy, which did this work inside the request; without `REDIS_URL` the API still does (inline) |
-| Cloudflare | DNS, plus the edge Worker in front of everything | The Worker passes `/api/v1/*` and `/webhooks/*` to `https://api-origin.bodhiraai.com`, a proxied record pointing at the load balancer |
+| Cloudflare | DNS, plus the edge Worker in front of everything | The Worker passes `/api/v1/*` and `/webhooks/*` to `https://api.bodhiraai.com`, a proxied record pointing at the load balancer |
 
 ## 2. Network and security groups
 
@@ -33,7 +33,7 @@ Supabase is reached over the internet with TLS. Its **Network Restrictions** can
 
 TLS:
 - Set Cloudflare SSL/TLS to **Full (strict)**.
-- Add a 443 listener to the load balancer with an ACM certificate for `api-origin.bodhiraai.com`. Set it on the environment, not in `.ebextensions`, because the certificate ARN differs per account:
+- Add a 443 listener to the load balancer with an ACM certificate for `api.bodhiraai.com`. Set it on the environment, not in `.ebextensions`, because the certificate ARN differs per account:
   ```bash
   eb config   # aws:elbv2:listener:443  Protocol: HTTPS, SSLCertificateArns: <acm-arn>
   ```
