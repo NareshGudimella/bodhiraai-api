@@ -16,6 +16,16 @@ ENV_NAME="${2:?usage: scripts/deploy-eb.sh <application> <environment> <version-
 LABEL="${3:?usage: scripts/deploy-eb.sh <application> <environment> <version-label>}"
 [ -f dist/main.js ] || { echo "dist/main.js missing: run npm run build first." >&2; exit 1; }
 
+# A wrong name or region otherwise fails only after the upload, with no hint.
+FOUND="$(aws elasticbeanstalk describe-environments --application-name "$APP" --environment-names "$ENV_NAME" \
+  --no-include-deleted --query 'Environments[0].EnvironmentName' --output text)"
+if [ "$FOUND" != "$ENV_NAME" ]; then
+  echo "::error::No Beanstalk environment $ENV_NAME in application $APP (region ${AWS_REGION:-default}). What exists there (application, environment, status):"
+  aws elasticbeanstalk describe-environments --no-include-deleted \
+    --query 'Environments[].[ApplicationName,EnvironmentName,Status]' --output text
+  exit 1
+fi
+
 BUNDLE="$(mktemp -d)/$LABEL.zip"
 zip -qr "$BUNDLE" dist assets package.json package-lock.json Procfile .ebextensions .platform
 # Beanstalk's own bucket for this account and region (created once, then reused).
