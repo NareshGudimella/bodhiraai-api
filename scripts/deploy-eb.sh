@@ -66,7 +66,18 @@ diagnose() {
   echo "== App output (web.stdout.log, last 15 min)"
   aws logs tail "/aws/elasticbeanstalk/$ENV_NAME/var/log/web.stdout.log" --since 15m --format short 2>&1 | tail -n 40 || true
 }
-if [ "$STATUS" != Ready ] || [ "$VERSION" != "$LABEL" ] || [ "$HEALTH" = Red ]; then
+# Ready only means the files are on the instances; wait for the load balancer's
+# health checks to pass (Green) before calling the deploy good.
+if [ "$STATUS" = Ready ] && [ "$VERSION" = "$LABEL" ]; then
+  for _ in $(seq 1 15); do
+    [ "$HEALTH" = Green ] && break
+    sleep 20
+    HEALTH="$(aws elasticbeanstalk describe-environments --environment-names "$ENV_NAME" \
+      --query 'Environments[0].Health' --output text)"
+    echo "   health=$HEALTH"
+  done
+fi
+if [ "$STATUS" != Ready ] || [ "$VERSION" != "$LABEL" ] || [ "$HEALTH" != Green ]; then
   echo "::error::Beanstalk deploy failed: status=$STATUS health=$HEALTH version=$VERSION (expected $LABEL)"
   events
   diagnose
