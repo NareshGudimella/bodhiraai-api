@@ -645,7 +645,7 @@ describe('Bodhira Direct and school content (e2e)', () => {
         .set(as('adminA'))
         .expect(200);
       expect(res.body.data.type).toBe('hls');
-      expect(res.body.data.watermark).toBe(u.adminA.email);
+      expect(res.body.data.watermark).toContain(`${u.adminA.email} · ID `);
       await http()
         .get(`/api/v1/lessons/${own.video.id}/playback`)
         .set(as('adminA'))

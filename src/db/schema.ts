@@ -2619,6 +2619,41 @@ export const web_handoff_codes = pgTable(
   ],
 );
 
+// not in legacy: strict playback protection (docs/video-hls-contract.md): one
+// row per playback of a lesson video; also the audit trail (kept 180 days).
+export const video_sessions = pgTable(
+  'video_sessions',
+  {
+    /** Random 32 hex characters (128 bits). */
+    id: text('id').primaryKey(),
+    user_id: bigint('user_id', { mode: 'bigint' }).notNull(),
+    lesson_id: bigint('lesson_id', { mode: 'bigint' }).notNull(),
+    ip: text('ip'),
+    user_agent: text('user_agent').notNull(),
+    created_at: timestamp('created_at', {
+      mode: 'date',
+      precision: 3,
+    }).notNull(),
+    key_deadline: timestamp('key_deadline', {
+      mode: 'date',
+      precision: 3,
+    }).notNull(),
+    segments_until: timestamp('segments_until', {
+      mode: 'date',
+      precision: 3,
+    }).notNull(),
+    key_fetches: integer('key_fetches').notNull().default(0),
+    revoked_at: timestamp('revoked_at', { mode: 'date', precision: 3 }),
+  },
+  (t) => [
+    index('video_sessions_user_id_created_at_index').on(
+      t.user_id,
+      t.created_at,
+    ),
+    index('video_sessions_lesson_id_index').on(t.lesson_id),
+  ],
+);
+
 // security: not in legacy: wrong-code counter for the OTP currently issued to a
 // user (POST /auth/otp/verify). Five wrong codes invalidate the OTP.
 export const otp_attempts = pgTable(

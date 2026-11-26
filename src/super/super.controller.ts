@@ -12,7 +12,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { Roles } from '../common/decorators/auth.decorators';
 import { ok } from '../common/http/api-response';
 import { toModel } from '../common/http/eloquent';
@@ -23,7 +23,7 @@ import { Role } from '../common/roles';
 import { DB, type Db } from '../db/db';
 import { assertNotDirect } from '../common/direct-school';
 import { asc } from '../db/helpers';
-import { school_syllabus, syllabi } from '../db/schema';
+import { school_syllabus, syllabi, video_sessions } from '../db/schema';
 import type { IncomingFile } from '../storage/upload-rules';
 import {
   storeOrReject,
@@ -271,6 +271,44 @@ export class SuperController {
         school: u.schools && !u.schools.deleted_at ? u.schools.name : null,
         status: u.status,
         created_at: iso8601(u.created_at),
+      })),
+      null,
+      pageMeta(page, perPage, total),
+    );
+  }
+
+  /** not in legacy: read-only playback audit (docs/video-hls-contract.md), newest first, 50 a page. */
+  @Get('video-sessions')
+  async videoSessions(@Query() query: Record<string, unknown>) {
+    const data = await laravelValidate(this.db, query, {
+      user: ['nullable', 'integer', 'min:1'],
+      lesson: ['nullable', 'integer', 'min:1'],
+    });
+    const perPage = 50;
+    const page = pageFrom(query.page);
+    const where = and(
+      data.user
+        ? eq(video_sessions.user_id, BigInt(data.user as string))
+        : undefined,
+      data.lesson
+        ? eq(video_sessions.lesson_id, BigInt(data.lesson as string))
+        : undefined,
+    );
+    const items = await this.db
+      .select()
+      .from(video_sessions)
+      .where(where)
+      .orderBy(desc(video_sessions.created_at), asc(video_sessions.id))
+      .limit(perPage)
+      .offset((page - 1) * perPage);
+    const total = await this.db.$count(video_sessions, where);
+    return ok(
+      items.map((r) => ({
+        ...r,
+        created_at: iso8601(r.created_at),
+        key_deadline: iso8601(r.key_deadline),
+        segments_until: iso8601(r.segments_until),
+        revoked_at: r.revoked_at ? iso8601(r.revoked_at) : null,
       })),
       null,
       pageMeta(page, perPage, total),

@@ -72,3 +72,4 @@ export type web_handoff_codes = typeof s.web_handoff_codes.$inferSelect;
 export type otp_attempts = typeof s.otp_attempts.$inferSelect;
 export type mail_settings = typeof s.mail_settings.$inferSelect;
 export type integration_settings = typeof s.integration_settings.$inferSelect;
+export type video_sessions = typeof s.video_sessions.$inferSelect;

@@ -6,15 +6,16 @@ import {
   type OnApplicationShutdown,
 } from '@nestjs/common';
 import { UnrecoverableError } from 'bullmq';
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, eq, isNotNull, lt } from 'drizzle-orm';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DB, type Db } from '../db/db';
-import { lessons } from '../db/schema';
+import { lessons, video_sessions } from '../db/schema';
 import { JobsService, logSafe } from '../jobs/jobs.service';
 import { encryptSecret } from '../mail/mail-crypto';
+import { RETENTION_DAYS } from './video-session';
 import { StorageService } from '../storage/storage.service';
 import {
   assertDiskSpace,
@@ -45,6 +46,7 @@ export class VideoJobs
 {
   private readonly logger = new Logger('VideoJobs');
   private sweepTimer: NodeJS.Timeout | null = null;
+  private cleanTimer: NodeJS.Timeout | null = null;
 
   constructor(
     @Inject(DB) private readonly db: Db,
@@ -138,10 +140,29 @@ export class VideoJobs
     void run();
     this.sweepTimer = setInterval(() => void run(), 5 * 60_000);
     this.sweepTimer.unref();
+    // Daily; deleting is idempotent, so several workers can do it.
+    const clean = () =>
+      this.cleanupSessions().catch((e: unknown) =>
+        this.logger.warn(`video session cleanup failed: ${logSafe(e)}`),
+      );
+    void clean();
+    this.cleanTimer = setInterval(() => void clean(), 24 * 3600_000);
+    this.cleanTimer.unref();
   }
 
   onApplicationShutdown() {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
+    if (this.cleanTimer) clearInterval(this.cleanTimer);
+  }
+
+  /** Strict playback protection: delete audit rows older than 180 days. */
+  async cleanupSessions(now = new Date()) {
+    const cutoff = new Date(now.getTime() - RETENTION_DAYS * 86_400_000);
+    const rows = await this.db
+      .delete(video_sessions)
+      .where(lt(video_sessions.created_at, cutoff))
+      .returning({ id: video_sessions.id });
+    return rows.length;
   }
 
   /** The `video-transcode` job (one attempt). */

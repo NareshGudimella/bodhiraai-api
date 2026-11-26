@@ -1,5 +1,6 @@
 import { Controller, Get, HttpException, Inject, Param } from '@nestjs/common';
-import { and, eq, or, sql } from 'drizzle-orm';
+import { and, eq, gte, isNull, or, sql } from 'drizzle-orm';
+import { Client, type ClientInfo } from '../common/decorators/client.decorator';
 import { CurrentUser } from '../common/decorators/auth.decorators';
 import { RateLimit } from '../common/decorators/rate-limit';
 import { ok } from '../common/http/api-response';
@@ -7,7 +8,7 @@ import { ApiException } from '../common/http/api.exception';
 import { modelNotFound, routeId } from '../common/http/laravel';
 import { Role } from '../common/roles';
 import { DB, type Db } from '../db/db';
-import { class_subject, classes, lessons } from '../db/schema';
+import { class_subject, classes, lessons, video_sessions } from '../db/schema';
 import type { lessons as Lesson, subjects, users } from '../db/types';
 import { signedFileUrl } from '../storage/file-url';
 import { StudentService } from '../student/student.service';
@@ -15,6 +16,13 @@ import { SUBSCRIPTION_INACTIVE_MESSAGE } from '../student/subscribed.guard';
 import { SubscriptionAccessService } from '../student/subscription-access.service';
 import { filesBaseUrl } from '../storage/file-url';
 import { signHlsToken } from './hls-token';
+import {
+  istStamp,
+  KEY_WINDOW_MS,
+  newSessionId,
+  overPlaybackLimit,
+  segmentsUntil,
+} from './video-session';
 import { AdminContentService } from '../admin/admin-content.service';
 
 /** not in legacy: 409 with the code under both `code` (envelope) and `error` (contract); clients read either. */
@@ -60,7 +68,11 @@ export class LessonPlaybackController {
 
   @Get(':lesson/playback')
   @RateLimit(60, 'user')
-  async playback(@CurrentUser() user: users, @Param('lesson') raw: string) {
+  async playback(
+    @CurrentUser() user: users,
+    @Param('lesson') raw: string,
+    @Client() client: ClientInfo,
+  ) {
     const id = routeId(raw, 'Lesson');
     const isStudent = user.role === (Role.Student as string);
     // Same order as the student routes: the paywall guard runs before lookup.
@@ -99,14 +111,67 @@ export class LessonPlaybackController {
         'video_failed',
       );
     if (lesson.video_hls_path) {
+      // not in legacy: strict playback protection (contract, last section).
+      const now = new Date();
+      const hourAgo = new Date(now.getTime() - 3600_000);
+      const dayAgo = new Date(now.getTime() - 24 * 3600_000);
+      const mine = eq(video_sessions.user_id, user.id);
+      const session = newSessionId();
+      const until = segmentsUntil(now, lesson.duration_sec);
+      // Count, revoke and insert under a per-user lock, so parallel requests can't
+      // slip past the limit (pg_advisory_xact_lock: transaction-scoped, pooler-safe).
+      const limited = await this.db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtextextended(${'video-session:' + String(user.id)}, 0))`,
+        );
+        const [{ h, d }] = await tx
+          .select({
+            h: sql<number>`count(*) filter (where ${gte(video_sessions.created_at, hourAgo)})`.mapWith(
+              Number,
+            ),
+            d: sql<number>`count(*)`.mapWith(Number),
+          })
+          .from(video_sessions)
+          .where(and(mine, gte(video_sessions.created_at, dayAgo)));
+        if (overPlaybackLimit(h, d)) return true;
+        // One active stream per account.
+        await tx
+          .update(video_sessions)
+          .set({ revoked_at: now })
+          .where(and(mine, isNull(video_sessions.revoked_at)));
+        await tx.insert(video_sessions).values({
+          id: session,
+          user_id: user.id,
+          lesson_id: lesson.id,
+          ip: client.ip,
+          user_agent: client.userAgent.slice(0, 500),
+          created_at: now,
+          key_deadline: new Date(now.getTime() + KEY_WINDOW_MS),
+          segments_until: until,
+        });
+        return false;
+      });
+      if (limited) {
+        const e = new ApiException(
+          'Too many plays in a short time. Try again later.',
+          429,
+          'playback_limit',
+        );
+        throw new HttpException(
+          { ...(e.getResponse() as object), error: 'playback_limit' },
+          429,
+        );
+      }
       // Not a Bearer URL: native players can't send headers, so the token rides in `t`.
-      const { token, exp } = signHlsToken(lesson.id, user.id);
+      const exp = Math.floor(until.getTime() / 1000);
+      const token = signHlsToken(session, lesson.id, user.id, exp);
       return ok(
         {
           type: 'hls',
           url: `${filesBaseUrl()}/api/v1/lessons/${lesson.id}/hls/master.m3u8?t=${token}`,
-          watermark: user.email || user.phone || user.name,
-          expires_at: new Date(exp * 1000).toISOString(),
+          watermark: `${user.email || user.phone || user.name} · ID ${user.id} · ${istStamp(now)}`,
+          expires_at: until.toISOString(),
+          session,
         },
         '',
       );

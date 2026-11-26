@@ -1,16 +1,26 @@
-import { Controller, Get, Inject, Param, Query, Res } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import {
+  Controller,
+  Get,
+  Inject,
+  Logger,
+  Param,
+  Query,
+  Res,
+} from '@nestjs/common';
+import { and, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 import type { Response } from 'express';
 import { Public } from '../common/decorators/auth.decorators';
+import { Client, type ClientInfo } from '../common/decorators/client.decorator';
 import { RateLimit } from '../common/decorators/rate-limit';
 import { ApiException } from '../common/http/api.exception';
 import { forbidden, routeId } from '../common/http/laravel';
 import { DB, type Db } from '../db/db';
-import { lessons } from '../db/schema';
+import { lessons, video_sessions } from '../db/schema';
 import { decryptSecret } from '../mail/mail-crypto';
 import { filesBaseUrl, signFileKey } from '../storage/file-url';
 import { StorageService } from '../storage/storage.service';
 import { verifyHlsToken } from './hls-token';
+import { MAX_KEY_FETCHES } from './video-session';
 
 const PLAYLISTS = ['master.m3u8', '360p.m3u8', '720p.m3u8'];
 const SEGMENT = /^[A-Za-z0-9_-]+\.ts$/;
@@ -26,16 +36,43 @@ const SEGMENT = /^[A-Za-z0-9_-]+\.ts$/;
 @Controller('lessons/:lesson/hls')
 @Public()
 export class HlsController {
+  private readonly logger = new Logger('HlsKey');
+
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly storage: StorageService,
   ) {}
 
-  /** The lesson's HLS prefix and key, for a valid token; 403 / 404 otherwise. */
-  private async authorise(raw: string, t: unknown) {
+  /**
+   * The lesson's HLS prefix and key, for a valid token; 403 / 404 otherwise.
+   * Strict playback protection: the session must be unrevoked and before its
+   * `key_deadline`; with `consume` (the key route) the fetch counter is bumped
+   * in the same single UPDATE ... RETURNING, so the key is served at most 3 times.
+   */
+  private async authorise(raw: string, t: unknown, consume = false) {
     const id = routeId(raw, 'Lesson');
-    const exp = verifyHlsToken(id, t);
-    if (exp === null) throw forbidden();
+    const tok = verifyHlsToken(id, t);
+    if (tok === null) throw forbidden();
+    const { exp } = tok;
+    const open = and(
+      eq(video_sessions.id, tok.session),
+      eq(video_sessions.lesson_id, id),
+      eq(video_sessions.user_id, tok.user),
+      isNull(video_sessions.revoked_at),
+      // The app clock, not now(): the columns are timestamp without time zone.
+      gt(video_sessions.key_deadline, new Date()),
+    );
+    const [session] = consume
+      ? await this.db
+          .update(video_sessions)
+          .set({ key_fetches: sql`${video_sessions.key_fetches} + 1` })
+          .where(and(open, lt(video_sessions.key_fetches, MAX_KEY_FETCHES)))
+          .returning({ id: video_sessions.id })
+      : await this.db
+          .select({ id: video_sessions.id })
+          .from(video_sessions)
+          .where(open);
+    if (!session) throw forbidden();
     const lesson = await this.db.query.lessons.findFirst({
       where: eq(lessons.id, id),
       columns: { video_hls_path: true, video_hls_key: true },
@@ -45,6 +82,8 @@ export class HlsController {
     return {
       id,
       exp,
+      user: tok.user,
+      session: tok.session,
       prefix: lesson.video_hls_path,
       enc: lesson.video_hls_key,
     };
@@ -56,9 +95,13 @@ export class HlsController {
   async key(
     @Param('lesson') raw: string,
     @Query('t') t: unknown,
+    @Client() client: ClientInfo,
     @Res() res: Response,
   ) {
-    const { enc } = await this.authorise(raw, t);
+    const { enc, id, user, session } = await this.authorise(raw, t, true);
+    this.logger.log(
+      `key fetch session=${session} user=${user} lesson=${id} ip=${client.ip}`,
+    );
     const key = Buffer.from(decryptSecret(enc), 'base64');
     res
       .status(200)

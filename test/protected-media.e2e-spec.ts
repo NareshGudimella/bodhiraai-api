@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Test } from '@nestjs/testing';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import request from 'supertest';
 import { DEV_FILE_URL_SECRET } from '../src/storage/file-url';
 import { AppModule } from '../src/app.module';
@@ -23,6 +23,7 @@ import {
   schools,
   subjects,
   users,
+  video_sessions,
 } from '../src/db/schema';
 import type { users as User } from '../src/db/types';
 import { signFileKey } from '../src/storage/file-url';
@@ -229,6 +230,7 @@ describe('Protected media (e2e)', () => {
       ['super', 'super_admin', null],
       ['parent', 'parent', a.id],
       ['limited', 'teacher', a.id],
+      ['capped', 'teacher', a.id],
     ] as const) {
       const made = await mkUser(role, { school_id: school });
       u[who] = made.user;
@@ -283,9 +285,13 @@ describe('Protected media (e2e)', () => {
         updated_at: now,
       })
       .returning();
-    await db
-      .insert(class_subject)
-      .values([{ class_id: klass2.id, subject_id: subject.id }]);
+    await db.insert(class_subject).values([
+      {
+        class_id: klass2.id,
+        subject_id: subject.id,
+        teacher_id: u.capped.id,
+      },
+    ]);
   });
 
   afterAll(async () => {
@@ -295,6 +301,9 @@ describe('Protected media (e2e)', () => {
     }
     if (db) {
       if (createdUsers.length) {
+        await db
+          .delete(video_sessions)
+          .where(inArray(video_sessions.user_id, createdUsers));
         await db
           .delete(personal_access_tokens)
           .where(inArray(personal_access_tokens.tokenable_id, createdUsers));
@@ -582,10 +591,28 @@ describe('Protected media (e2e)', () => {
       expect(res.body.success).toBe(true);
       const d = res.body.data;
       expect(Object.keys(d).sort()).toEqual(
-        ['expires_at', 'type', 'url', 'watermark'].sort(),
+        ['expires_at', 'session', 'type', 'url', 'watermark'].sort(),
       );
       expect(d.type).toBe('hls');
-      expect(d.watermark).toBe(u.student.email);
+      expect(d.watermark).toMatch(
+        new RegExp(
+          `^${u.student.email} · ID ${u.student.id} · \\d{2} \\w{3} \\d{4} \\d{2}:\\d{2} IST$`,
+        ),
+      );
+      expect(d.session).toMatch(/^[0-9a-f]{32}$/);
+      const [row] = await db
+        .select()
+        .from(video_sessions)
+        .where(eq(video_sessions.id, d.session));
+      expect(row).toMatchObject({
+        user_id: u.student.id,
+        lesson_id: videoLesson,
+        key_fetches: 0,
+        revoked_at: null,
+      });
+      expect(row.key_deadline.getTime() - row.created_at.getTime()).toBe(
+        600_000,
+      );
       expect(d.url).toMatch(
         new RegExp(
           `^http://files\\.e2e\\.test/api/v1/lessons/${videoLesson}/hls/master\\.m3u8\\?t=`,
@@ -637,7 +664,7 @@ describe('Protected media (e2e)', () => {
     // subjects (and used curricula; test/organizations.e2e-spec.ts).
     it('lets the school admin play its own subject, watermarked with the email', async () => {
       const res = await play('admin', videoLesson).expect(200);
-      expect(res.body.data.watermark).toBe(u.admin.email);
+      expect(res.body.data.watermark).toContain(`${u.admin.email} · ID `);
     });
 
     it('refuses super admins and parents', async () => {
@@ -663,9 +690,9 @@ describe('Protected media (e2e)', () => {
     });
 
     it('limits playback to 60 a minute per user', async () => {
-      for (let i = 0; i < 60; i++)
-        await play('limited', videoLesson).expect(200);
-      await play('limited', videoLesson).expect(429);
+      // The URL lesson creates no session, so only the per-minute limit applies.
+      for (let i = 0; i < 60; i++) await play('limited', urlLesson).expect(200);
+      await play('limited', urlLesson).expect(429);
       // Another user is unaffected.
       await play('subjectTeacher', videoLesson).expect(200);
     });
@@ -674,10 +701,17 @@ describe('Protected media (e2e)', () => {
   // ------------------------------------------------ /lessons/:id/hls/*
   describe('GET /lessons/:id/hls/:file and /key', () => {
     const base = () => `/api/v1/lessons/${videoLesson}/hls`;
-    const token = () => signHlsToken(videoLesson, u.student.id).token;
+    // Each call starts a new session (and revokes the previous one).
+    const token = async (who = 'student') => {
+      const res = await http()
+        .get(`/api/v1/lessons/${videoLesson}/playback`)
+        .set(bearer(t[who]))
+        .expect(200);
+      return new URL(res.body.data.url).searchParams.get('t') as string;
+    };
 
     it('rewrites the master: variant URIs point at the same route with the same token', async () => {
-      const t1 = token();
+      const t1 = await token();
       const res = await http().get(`${base()}/master.m3u8?t=${t1}`).expect(200);
       expect(res.headers['content-type']).toMatch(/mpegurl/);
       expect(res.headers['cache-control']).toBe('private, no-store');
@@ -687,7 +721,7 @@ describe('Protected media (e2e)', () => {
     });
 
     it('rewrites a media playlist: signed /files segment links and our key route', async () => {
-      const t1 = token();
+      const t1 = await token();
       const res = await http().get(`${base()}/360p.m3u8?t=${t1}`).expect(200);
       expect(res.text).toContain(
         `#EXT-X-KEY:METHOD=AES-128,URI="http://files.e2e.test${base()}/key?t=${t1}",IV=0x${'ab'.repeat(16)}`,
@@ -708,16 +742,18 @@ describe('Protected media (e2e)', () => {
       expect(seg.headers['content-length']).toBe('13');
     });
 
-    it('serves the 16-byte key', async () => {
-      const res = await http()
-        .get(`${base()}/key?t=${token()}`)
+    const getKey = (t1: string) =>
+      http()
+        .get(`${base()}/key?t=${t1}`)
         .buffer(true)
         .parse((r, cb) => {
           const chunks: Buffer[] = [];
           r.on('data', (c: Buffer) => chunks.push(c));
           r.on('end', () => cb(null, Buffer.concat(chunks)));
-        })
-        .expect(200);
+        });
+
+    it('serves the 16-byte key', async () => {
+      const res = await getKey(await token()).expect(200);
       expect(res.headers['content-type']).toBe('application/octet-stream');
       expect(res.headers['cache-control']).toBe('no-store');
       expect(res.body).toHaveLength(16);
@@ -725,18 +761,16 @@ describe('Protected media (e2e)', () => {
     });
 
     it('answers 403 for a missing, tampered, wrong-lesson or expired token', async () => {
-      const good = token();
-      const [u1, e, m] = good.split('.');
-      const expired = signHlsToken(videoLesson, u.student.id, {
-        now: Date.now() - 7 * 3600_000,
-      }).token;
-      const other = signHlsToken(urlLesson, u.student.id).token;
+      const good = await token();
+      const [s1, u1, e, m] = good.split('.');
+      const expired = signHlsToken(s1, videoLesson, u.student.id, 1_000);
+      const other = signHlsToken(s1, urlLesson, u.student.id, Number(e));
       for (const path of ['master.m3u8', '360p.m3u8', 'key']) {
         await http().get(`${base()}/${path}`).expect(403);
         for (const bad of [
           'garbage',
-          `${u1}.${e}.${m.slice(0, -1)}${m.endsWith('A') ? 'B' : 'A'}`,
-          `${u1}.${Number(e) + 1}.${m}`,
+          `${s1}.${u1}.${e}.${m.slice(0, -1)}${m.endsWith('A') ? 'B' : 'A'}`,
+          `${s1}.${u1}.${Number(e) + 1}.${m}`,
           expired,
           other,
         ])
@@ -745,12 +779,106 @@ describe('Protected media (e2e)', () => {
     });
 
     it('answers 404 for other files and for a lesson without HLS', async () => {
-      await http().get(`${base()}/360p_00000.ts?t=${token()}`).expect(404);
-      await http().get(`${base()}/..%2Fx.m3u8?t=${token()}`).expect(404);
-      const t2 = signHlsToken(urlLesson, u.student.id).token;
+      const t1 = await token();
+      await http().get(`${base()}/360p_00000.ts?t=${t1}`).expect(404);
+      await http().get(`${base()}/..%2Fx.m3u8?t=${t1}`).expect(404);
+      const [s1, , e] = t1.split('.');
+      const t2 = signHlsToken(s1, urlLesson, u.student.id, Number(e));
       await http()
         .get(`/api/v1/lessons/${urlLesson}/hls/master.m3u8?t=${t2}`)
-        .expect(404);
+        .expect(403); // no session for that lesson
+    });
+
+    // not in legacy: strict playback protection (contract, last section)
+    describe('strict playback protection', () => {
+      const sessionOf = (t1: string) => t1.split('.')[0];
+
+      it('a second playback revokes the first: its key route gives 403', async () => {
+        const first = await token('subjectTeacher');
+        const second = await token('subjectTeacher');
+        await http().get(`${base()}/key?t=${first}`).expect(403);
+        await http().get(`${base()}/master.m3u8?t=${first}`).expect(403);
+        const [row] = await db
+          .select()
+          .from(video_sessions)
+          .where(eq(video_sessions.id, sessionOf(first)));
+        expect(row.revoked_at).not.toBeNull();
+        await getKey(second).expect(200);
+      });
+
+      it('serves the key 3 times, then 403', async () => {
+        const t1 = await token('classTeacher');
+        for (let i = 0; i < 3; i++) await getKey(t1).expect(200);
+        await http().get(`${base()}/key?t=${t1}`).expect(403);
+        const [row] = await db
+          .select()
+          .from(video_sessions)
+          .where(eq(video_sessions.id, sessionOf(t1)));
+        expect(row.key_fetches).toBe(3);
+        // Playlists stay open until key_deadline.
+        await http().get(`${base()}/360p.m3u8?t=${t1}`).expect(200);
+      });
+
+      it('after key_deadline the key and the playlists give 403', async () => {
+        const t1 = await token('admin');
+        await db
+          .update(video_sessions)
+          .set({ key_deadline: new Date(Date.now() - 1000) })
+          .where(eq(video_sessions.id, sessionOf(t1)));
+        await http().get(`${base()}/key?t=${t1}`).expect(403);
+        for (const f of ['master.m3u8', '360p.m3u8'])
+          await http().get(`${base()}/${f}?t=${t1}`).expect(403);
+        const [row] = await db
+          .select()
+          .from(video_sessions)
+          .where(eq(video_sessions.id, sessionOf(t1)));
+        expect(row.key_fetches).toBe(0);
+      });
+
+      it('allows 20 playbacks an hour; the 21st is 429 playback_limit', async () => {
+        const go = () =>
+          http()
+            .get(`/api/v1/lessons/${videoLesson}/playback`)
+            .set(bearer(t.capped));
+        for (let i = 0; i < 20; i++) await go().expect(200);
+        const res = await go().expect(429);
+        expect(res.body).toMatchObject({
+          success: false,
+          code: 'playback_limit',
+          error: 'playback_limit',
+        });
+        // Only the newest of the 20 is still open.
+        const open = await db
+          .select()
+          .from(video_sessions)
+          .where(
+            and(
+              eq(video_sessions.user_id, u.capped.id),
+              eq(video_sessions.lesson_id, videoLesson),
+            ),
+          );
+        expect(open.filter((r) => !r.revoked_at)).toHaveLength(1);
+      });
+
+      it('GET /super/video-sessions: super admin only, filterable, newest first', async () => {
+        const list = (who: string, q = '') =>
+          http().get(`/api/v1/super/video-sessions${q}`).set(bearer(t[who]));
+        const res = await list('super', `?user=${u.capped.id}`).expect(200);
+        expect(res.body.meta.total).toBe(20);
+        expect(res.body.data).toHaveLength(20);
+        expect(res.body.data[0]).toMatchObject({
+          user_id: Number(u.capped.id),
+          lesson_id: Number(videoLesson),
+        });
+        const times = res.body.data.map((r: { created_at: string }) =>
+          Date.parse(r.created_at),
+        );
+        expect(times).toEqual([...times].sort((x, y) => y - x));
+        await list('super', `?lesson=${videoLesson}&page=2`).expect(200);
+        for (const who of ['admin', 'student', 'classTeacher', 'parent'])
+          await list(who).expect(403);
+        await http().get('/api/v1/super/video-sessions').expect(401);
+      });
     });
   });
 });
