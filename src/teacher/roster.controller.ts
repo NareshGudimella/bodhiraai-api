@@ -12,6 +12,7 @@ import {
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
+import { RateLimit } from '../common/decorators/rate-limit';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   assertPhoneFree,
@@ -52,6 +53,7 @@ const AVATAR = { field: 'avatar', kind: 'image' as const, maxKb: 4096 };
 
 const rosterRow = (s: users, rollNo: string | null) => ({
   id: s.id,
+  public_id: s.public_id, // not in legacy
   name: s.name,
   username: s.username,
   email: s.email,
@@ -113,6 +115,7 @@ export class RosterController {
   }
 
   @Post('classes/:class/students')
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(FileInterceptor('avatar', uploadOptions(12)))
   async add(
     @CurrentUser() user: users,
@@ -143,6 +146,7 @@ export class RosterController {
 
   @Put('classes/:class/students/:student')
   @HttpCode(200)
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(FileInterceptor('avatar', uploadOptions(12)))
   async update(
     @CurrentUser() user: users,

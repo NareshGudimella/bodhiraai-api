@@ -85,6 +85,20 @@
       "when": 1795727533688,
       "tag": "0011_video_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795798179613,
+      "tag": "0012_lesson_view_count",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1795798603834,
+      "tag": "0013_slugs_public_ids",
+      "breakpoints": true
     }
   ]
 }

@@ -9,7 +9,7 @@ import {
   Query,
   Res,
 } from '@nestjs/common';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull } from 'drizzle-orm';
 import type { Response } from 'express';
 import {
   CurrentUser,
@@ -136,7 +136,13 @@ export class CheckoutController {
     if (await this.billing.liveBilling()) {
       const chosen = await this.selectPlan(user, key, cycle, now);
       return ok(
-        { checkout: { subscription_id: Number(chosen.id), cycle } },
+        {
+          checkout: {
+            subscription_id: Number(chosen.id),
+            subscription_public_id: chosen.public_id, // not in legacy
+            cycle,
+          },
+        },
         `Complete your payment to activate ${plan.name} (${cycle}).`,
       );
     }
@@ -290,10 +296,30 @@ export class CheckoutController {
     });
     if (!sameJson(sub.meta, meta)) changed.meta = meta;
     if (Object.keys(changed).length) {
-      await this.db
+      // security: not in legacy: a verified payment is applied once. The update only
+      // matches while the meta read above (with the pending order) is unchanged, so of
+      // two concurrent completes one gets nothing back and no second invoice is issued.
+      const updated = await this.db
         .update(subscriptionsTable)
         .set({ ...changed, updated_at: now })
-        .where(eq(subscriptionsTable.id, sub.id));
+        .where(
+          and(
+            eq(subscriptionsTable.id, sub.id),
+            verified
+              ? sub.meta === null
+                ? isNull(subscriptionsTable.meta)
+                : eq(subscriptionsTable.meta, sub.meta)
+              : undefined,
+          ),
+        )
+        .returning({ id: subscriptionsTable.id });
+      if (!updated.length) {
+        throw new ApiException(
+          'Payment could not be verified.',
+          422,
+          'payment_unverified',
+        );
+      }
     }
     const active = { ...sub, ...changed };
 
@@ -488,14 +514,14 @@ export class CheckoutController {
     return sub;
   }
 
-  /** Route binding plus guardInvoice (an invoice without a user is open to any student). */
+  /** Route binding plus guardInvoice. security: not in legacy: fixes a legacy bug, an invoice without a user was open to any student; now refused. */
   private async ownInvoice(user: users, raw: string) {
     const id = routeId(raw, 'Invoice');
     const invoice = await this.db.query.invoices.findFirst({
       where: eq(invoicesTable.id, id),
     });
     if (!invoice) throw modelNotFound('Invoice', id);
-    if (invoice.user_id && invoice.user_id !== user.id) throw forbidden();
+    if (invoice.user_id !== user.id) throw forbidden();
     return invoice;
   }
 

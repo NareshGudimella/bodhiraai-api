@@ -25,6 +25,7 @@
     "db:seed": "ts-node --transpile-only src/db/seed.ts",
     "db:direct-school": "ts-node --transpile-only src/db/direct-school.ts",
     "user:create-super-admin": "ts-node --transpile-only src/db/create-super-admin.ts",
+    "cms:sanitize": "ts-node --transpile-only src/db/sanitize-cms.ts",
     "files:make-private": "ts-node --transpile-only src/db/make-files-private.ts",
     "settings:import-env": "ts-node --transpile-only src/db/import-env-settings.ts"
   },
@@ -49,6 +50,7 @@
     "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
+    "sanitize-html": "^2.18.2",
     "sharp": "^0.35.5"
   },
   "devDependencies": {
@@ -62,6 +64,7 @@
     "@types/node": "^22.20.5",
     "@types/pdfkit": "^0.17.7",
     "@types/pg": "^8.23.1",
+    "@types/sanitize-html": "^2.16.2",
     "@types/supertest": "^7.0.0",
     "drizzle-kit": "^0.31.11",
     "eslint": "^10.15.0",

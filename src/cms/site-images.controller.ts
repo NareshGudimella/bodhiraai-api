@@ -7,6 +7,7 @@ import {
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
+import { RateLimit } from '../common/decorators/rate-limit';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { and, eq } from 'drizzle-orm';
 import { CurrentUser, Roles } from '../common/decorators/auth.decorators';
@@ -107,6 +108,7 @@ export class SiteImagesController {
   }
 
   @Post('replace')
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(AnyFilesInterceptor(uploadOptions(11, 1)))
   async replace(
     @CurrentUser() user: users,
@@ -161,6 +163,7 @@ export class SiteImagesController {
   }
 
   @Post('video')
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(AnyFilesInterceptor(uploadOptions(151, 1)))
   async video(
     @CurrentUser() user: users,

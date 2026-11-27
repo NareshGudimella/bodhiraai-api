@@ -1,9 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { and, eq, ne } from 'drizzle-orm';
+import { and, eq, isNull, ne } from 'drizzle-orm';
 import { phpJsonEncode } from '../common/http/laravel';
 import { DB, type Db } from '../db/db';
-import { personal_access_tokens, users as usersTable } from '../db/schema';
+import {
+  personal_access_tokens,
+  users as usersTable,
+  video_sessions,
+} from '../db/schema';
 import type { users } from '../db/types';
 
 /** Laravel morph class stored in personal_access_tokens.tokenable_type. */
@@ -164,6 +168,22 @@ export class TokenService {
           exceptTokenId
             ? ne(personal_access_tokens.id, exceptTokenId)
             : undefined,
+        ),
+      );
+  }
+
+  /**
+   * security: not in legacy. Ends the user's open lesson-video sessions (their HLS links
+   * stop working at once). Call it with revokeAllForUser when an account is blocked or deactivated.
+   */
+  revokeVideoSessions(userId: bigint) {
+    return this.db
+      .update(video_sessions)
+      .set({ revoked_at: new Date() })
+      .where(
+        and(
+          eq(video_sessions.user_id, userId),
+          isNull(video_sessions.revoked_at),
         ),
       );
   }

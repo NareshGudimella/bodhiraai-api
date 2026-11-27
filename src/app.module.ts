@@ -10,6 +10,7 @@ import { BillingModule } from './billing/billing.module';
 import { ChatModule } from './chat/chat.module';
 import { CmsModule } from './cms/cms.module';
 import { RateLimiterModule } from './common/rate-limiter';
+import { RouteBindingGuard } from './common/guards/route-binding.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { TokenAuthGuard } from './common/guards/token-auth.guard';
 import { TransformRequestMiddleware } from './common/http/transform-request.middleware';
@@ -65,6 +66,8 @@ import { IntegrationsModule } from './integrations/integrations.module';
     // Order matters: authenticate → authorize role. Rate limits are per route.
     { provide: APP_GUARD, useClass: TokenAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    // Last: slugs and public ids in route params become ids for everything after.
+    { provide: APP_GUARD, useClass: RouteBindingGuard },
   ],
 })
 export class AppModule implements NestModule {

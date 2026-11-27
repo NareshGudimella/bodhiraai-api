@@ -74,6 +74,7 @@ export class StudentService {
     return {
       student: {
         id: student.id,
+        public_id: student.public_id, // not in legacy
         name: student.name,
         grade: student.grade,
         avatar: signedFileUrl(student.avatar), // security: not in legacy: signed private-file link
@@ -449,6 +450,7 @@ export class StudentService {
       columns: {
         id: true,
         title: true,
+        url_slug: true, // not in legacy
         type: true,
         sort_order: true,
         duration_sec: true,
@@ -576,6 +578,7 @@ export class StudentService {
       quiz: quiz
         ? {
             id: quiz.id,
+            slug: quiz.slug, // not in legacy
             title: quiz.title,
             duration_min: quiz.duration_min,
             total_marks: quiz.total_marks,
@@ -586,6 +589,7 @@ export class StudentService {
       attempt: attempt
         ? {
             id: attempt.id,
+            public_id: attempt.public_id, // not in legacy
             score: attempt.score,
             total_marks: attempt.total_marks,
             passed: attempt.score >= quiz!.pass_marks,
@@ -611,6 +615,9 @@ export class StudentService {
     });
     return rows.map((p) => ({
       lesson_id: p.lesson_id,
+      lesson_slug: p.lessons?.url_slug ?? null, // not in legacy: url_slug
+      subject_slug: p.lessons?.chapters?.subjects?.url_slug ?? null, // not in legacy: url_slug
+      chapter_slug: p.lessons?.chapters?.url_slug ?? null, // not in legacy: url_slug
       title: p.lessons?.title ?? null,
       subject: p.lessons?.chapters?.subjects?.name ?? null,
       chapter: p.lessons?.chapters?.title ?? null,
@@ -656,6 +663,7 @@ export class StudentService {
     });
     return rows.map((q) => ({
       id: q.id,
+      slug: q.slug, // not in legacy
       title: q.title,
       subject: q.subjects?.name ?? null,
       chapter: q.chapters?.title ?? null,

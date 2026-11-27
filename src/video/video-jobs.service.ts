@@ -131,6 +131,35 @@ export class VideoJobs
     return queued;
   }
 
+  /**
+   * not in legacy: sets each HLS lesson's `duration_sec` to the video's real length,
+   * the sum of its playlist's segment durations (fixes lessons whose duration was
+   * typed in before transcoding measured it). Only changes rows that differ.
+   */
+  async syncDurations(): Promise<number> {
+    const rows = await this.db.query.lessons.findMany({
+      where: isNotNull(lessons.video_hls_path),
+      columns: { id: true, video_hls_path: true, duration_sec: true },
+    });
+    let fixed = 0;
+    for (const l of rows) {
+      const playlist = await this.storage.getPrivate(
+        `${l.video_hls_path}360p.m3u8`,
+      );
+      const seconds = playlist ? hlsDuration(playlist.toString('utf8')) : 0;
+      if (seconds > 0 && seconds !== l.duration_sec) {
+        await this.db
+          .update(lessons)
+          .set({ duration_sec: seconds })
+          .where(eq(lessons.id, l.id));
+        fixed++;
+      }
+    }
+    if (fixed)
+      this.logger.log(`video durations corrected on ${fixed} lesson(s)`);
+    return fixed;
+  }
+
   onApplicationBootstrap() {
     if ((process.env.APP_TYPE ?? '').trim().toUpperCase() !== 'WORKER') return;
     const run = () =>
@@ -139,6 +168,10 @@ export class VideoJobs
       );
     void run();
     this.sweepTimer = setInterval(() => void run(), 5 * 60_000);
+    // Once at start: lessons transcoded before durations were measured get their real length.
+    void this.syncDurations().catch((e: unknown) =>
+      this.logger.warn(`video duration sync failed: ${logSafe(e)}`),
+    );
     this.sweepTimer.unref();
     // Daily; deleting is idempotent, so several workers can do it.
     const clean = () =>
@@ -191,21 +224,22 @@ export class VideoJobs
     try {
       const size = await this.storage.sizeOfPrivate(key);
       if (size === null) throw new Error('The uploaded original is missing');
-      const aesKey = await this.withOriginal(key, size, async (src) => {
-        const { key: aes } = await transcodeToHls(src, (f) =>
+      const out = await this.withOriginal(key, size, async (src) => {
+        return transcodeToHls(src, (f) =>
           this.storage.putPrivateFile(
             `${prefix}${f.name}`,
             f.path,
             f.contentType,
           ),
         );
-        return aes;
       });
       const [kept] = await this.db
         .update(lessons)
         .set({
           video_hls_path: prefix,
-          video_hls_key: encryptSecret(aesKey.toString('base64')),
+          video_hls_key: encryptSecret(out.key.toString('base64')),
+          // not in legacy: progress (the 90% rule) uses the video's real length.
+          ...(out.durationSec > 0 && { duration_sec: out.durationSec }),
           video_status: null,
           video_upload_key: null,
         })
@@ -266,4 +300,12 @@ export class VideoJobs
 export function transcodeJobId(lessonId: bigint, key: string) {
   const hash = createHash('sha256').update(key).digest('hex').slice(0, 16);
   return `video-transcode-${lessonId}-${hash}`;
+}
+
+/** A VOD playlist's length in whole seconds: the sum of its `#EXTINF` durations. */
+export function hlsDuration(playlist: string): number {
+  let total = 0;
+  for (const m of playlist.matchAll(/^#EXTINF:([\d.]+)/gm))
+    total += Number(m[1]);
+  return Math.round(total);
 }

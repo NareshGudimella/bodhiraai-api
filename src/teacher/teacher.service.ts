@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { insertWithSlug, SLUG_WORD } from '../common/slug';
 import { and, eq, exists, gte, inArray, isNull, or, sql } from 'drizzle-orm';
 import { ApiException, ValidationFailed } from '../common/http/api.exception';
 import { toModel, withPivot } from '../common/http/eloquent';
@@ -241,6 +242,7 @@ export class TeacherService {
     return {
       teacher: {
         id: teacher.id,
+        public_id: teacher.public_id, // not in legacy
         name: teacher.name,
         school: school?.name ?? null,
       },
@@ -255,6 +257,7 @@ export class TeacherService {
       },
       classes: classes.map((c) => ({
         id: c.id,
+        slug: c.slug, // not in legacy
         label: classLabel(c),
         students_count: c.students_count,
       })),
@@ -262,6 +265,7 @@ export class TeacherService {
         id: s.id,
         // Not in legacy: lets the app open the assignment behind a submission.
         assignment_id: s.assignment_id,
+        assignment_slug: s.assignments?.slug ?? null, // not in legacy
         assignment_title: s.assignments?.title ?? null,
         student: s.users_assignment_submissions_student_idTousers?.name ?? null,
         class: s.assignments?.classes
@@ -355,6 +359,7 @@ export class TeacherService {
     const rows = await this.db
       .select({
         id: usersTable.id,
+        public_id: usersTable.public_id,
         name: usersTable.name,
         roll_no: class_student.roll_no,
       })
@@ -367,6 +372,7 @@ export class TeacherService {
       date: dateString(date),
       records: rows.map((r) => ({
         student_id: r.id,
+        student_public_id: r.public_id, // not in legacy
         name: r.name,
         roll_no: r.roll_no,
         status: status.get(r.id) ?? null,
@@ -469,31 +475,40 @@ export class TeacherService {
     dueDate: Date | null,
   ) {
     const now = new Date();
-    const [a] = await this.db
-      .insert(assignmentsTable)
-      .values({
-        teacher_id: teacher.id,
-        is_published: true,
-        class_id: BigInt(data.class_id as string | number),
-        ...('subject_id' in data && {
-          subject_id:
-            data.subject_id === null
-              ? null
-              : BigInt(data.subject_id as string | number),
-        }),
-        title: data.title as string,
-        ...('description' in data && {
-          description: data.description as string | null,
-        }),
-        ...('attachment_url' in data && {
-          attachment_url: data.attachment_url as string | null,
-        }),
-        ...('due_date' in data && { due_date: dueDate }),
-        max_marks: Number(data.max_marks),
-        created_at: now,
-        updated_at: now,
-      })
-      .returning();
+    const [a] = await insertWithSlug(
+      this.db,
+      assignmentsTable,
+      assignmentsTable.slug,
+      data.title as string,
+      SLUG_WORD.assignment,
+      (slug) =>
+        this.db
+          .insert(assignmentsTable)
+          .values({
+            slug,
+            teacher_id: teacher.id,
+            is_published: true,
+            class_id: BigInt(data.class_id as string | number),
+            ...('subject_id' in data && {
+              subject_id:
+                data.subject_id === null
+                  ? null
+                  : BigInt(data.subject_id as string | number),
+            }),
+            title: data.title as string,
+            ...('description' in data && {
+              description: data.description as string | null,
+            }),
+            ...('attachment_url' in data && {
+              attachment_url: data.attachment_url as string | null,
+            }),
+            ...('due_date' in data && { due_date: dueDate }),
+            max_marks: Number(data.max_marks),
+            created_at: now,
+            updated_at: now,
+          })
+          .returning(),
+    );
 
     const students = await this.db.query.class_student.findMany({
       where: eq(class_student.class_id, a.class_id),
@@ -568,6 +583,7 @@ export class TeacherService {
         const sub = byStudent.get(student.id);
         return {
           student_id: student.id,
+          student_public_id: student.public_id, // not in legacy
           name: student.name,
           submission_id: sub?.id ?? null,
           status: sub?.status ?? 'pending',
@@ -703,6 +719,7 @@ export class TeacherService {
         .sort((a, b) => time(b.submitted_at) - time(a.submitted_at))
         .map((a) => ({
           id: a.id,
+          public_id: a.public_id, // not in legacy
           student: a.users?.name ?? null,
           score: a.score,
           total: a.total_marks,

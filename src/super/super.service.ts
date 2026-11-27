@@ -151,11 +151,21 @@ export class SuperService {
         ),
         ai_sessions: await this.db.$count(ai_chat_sessions),
         ai_messages: await this.db.$count(ai_chat_messages),
-        lesson_views: await this.db.$count(lesson_progress),
+        // not in legacy: total plays, replays included (was one per student and lesson).
+        lesson_views: Number(
+          (
+            await this.db
+              .select({
+                n: sql<string>`coalesce(sum(${lesson_progress.view_count}), 0)`,
+              })
+              .from(lesson_progress)
+          )[0]?.n ?? 0,
+        ),
       },
       growth,
       top_schools: top.map((s) => ({
         id: s.id,
+        slug: s.slug, // not in legacy
         name: s.name,
         code: s.code,
         plan: s.plan,
@@ -506,7 +516,13 @@ export class SuperService {
         dateCmp(col, '<=', new Date(Date.now() + 30 * 86_400_000)),
       ),
       orderBy: [asc(col)],
-      columns: { id: true, name: true, plan: true, plan_expires_at: true },
+      columns: {
+        id: true,
+        slug: true,
+        name: true,
+        plan: true,
+        plan_expires_at: true,
+      },
     });
     const byStatus = (st: string) => all.filter((s) => s.status === st).length;
     return {

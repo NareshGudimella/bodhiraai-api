@@ -14,8 +14,9 @@ import {
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
+import { RateLimit } from '../common/decorators/rate-limit';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { Request } from 'express';
 import { Readable } from 'node:stream';
 import {
@@ -58,7 +59,12 @@ import {
   uploadOptions,
   validateWithFiles,
 } from '../storage/uploads';
-import { apiOrigin, signUpload, verifyUpload } from '../video/direct-upload';
+import {
+  apiOrigin,
+  lessonVersion,
+  signUpload,
+  verifyUpload,
+} from '../video/direct-upload';
 import { lessonPlayback } from '../video/lesson-playback';
 import { VideoJobs } from '../video/video-jobs.service';
 import { ContentService } from './content.service';
@@ -206,7 +212,7 @@ export class ContentController {
       is_published: ['nullable', 'boolean'],
     });
     const c = await this.content.createChapter(subject, data);
-    return ok({ id: c.id }, 'Chapter created.');
+    return ok({ id: c.id, url_slug: c.url_slug }, 'Chapter created.');
   }
 
   @Delete('chapters/:chapter')
@@ -228,7 +234,13 @@ export class ContentController {
     for (const v of videos)
       if (v.video_upload_key)
         await this.storage.deletePrivate(v.video_upload_key);
-    return ok({ subject_id: chapter.subject_id }, 'Chapter deleted.');
+    return ok(
+      {
+        subject_id: chapter.subject_id,
+        subject_slug: chapter.subjects?.url_slug ?? null, // not in legacy: url_slug
+      },
+      'Chapter deleted.',
+    );
   }
 
   @Get('chapters/:chapter')
@@ -362,6 +374,7 @@ export class ContentController {
   }
 
   @Post('chapters/:chapter/lessons')
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(
     FileFieldsInterceptor(
       [
@@ -401,7 +414,7 @@ export class ContentController {
     const l = await this.content.createLesson(chapter, data);
     if (l.video_upload_key)
       await this.videoJobs.startTranscode(l.id, l.video_upload_key);
-    return ok({ id: l.id }, 'Lesson added.');
+    return ok({ id: l.id, url_slug: l.url_slug }, 'Lesson added.');
   }
 
   /**
@@ -449,6 +462,7 @@ export class ContentController {
       filename,
       size: Number(data.size),
       type: data.content_type as string,
+      ver: lessonVersion(lesson),
     });
     return ok({
       mode: 'stream',
@@ -482,6 +496,9 @@ export class ContentController {
       throw new ApiException('The upload link is invalid or has expired.', 403);
     const { chapters: chapter, ...lesson } = await this.lesson(raw);
     this.content.guardSubject(user, chapter?.subjects ?? null);
+    // security: not in legacy: single use, and only for the lesson as it was when issued.
+    if (grant.ver !== lessonVersion(lesson))
+      throw new ApiException('The upload link is invalid or has expired.', 403);
 
     const length = req.headers['content-length'];
     if (
@@ -543,10 +560,9 @@ export class ContentController {
       throw e;
     }
 
-    await this.storage.delete(lesson.content_url);
-    await this.videoJobs.deleteHls(lesson.video_hls_path);
-    await this.dropUpload(lesson);
-    await this.db
+    // The update only matches the lesson as it was when the link was issued, so of two
+    // parallel PUTs with one link only one wins (the other's file is removed).
+    const [won] = await this.db
       .update(lessonsTable)
       .set({
         ...NO_VIDEO,
@@ -555,7 +571,28 @@ export class ContentController {
         video_upload_key: key,
         updated_at: new Date(),
       })
-      .where(eq(lessonsTable.id, lesson.id));
+      .where(
+        and(
+          eq(lessonsTable.id, lesson.id),
+          lesson.updated_at
+            ? eq(lessonsTable.updated_at, lesson.updated_at)
+            : isNull(lessonsTable.updated_at),
+          lesson.video_upload_key
+            ? eq(lessonsTable.video_upload_key, lesson.video_upload_key)
+            : isNull(lessonsTable.video_upload_key),
+          lesson.video_hls_path
+            ? eq(lessonsTable.video_hls_path, lesson.video_hls_path)
+            : isNull(lessonsTable.video_hls_path),
+        ),
+      )
+      .returning({ id: lessonsTable.id });
+    if (!won) {
+      await this.storage.deletePrivate(key);
+      throw new ApiException('The upload link is invalid or has expired.', 403);
+    }
+    await this.storage.delete(lesson.content_url);
+    await this.videoJobs.deleteHls(lesson.video_hls_path);
+    await this.dropUpload(lesson);
     await this.videoJobs.startTranscode(lesson.id, key);
     return this.lessonShow(user, raw);
   }
@@ -575,6 +612,7 @@ export class ContentController {
   }
 
   @Patch('lessons/:lesson')
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(
     FileFieldsInterceptor(
       [
@@ -642,7 +680,14 @@ export class ContentController {
       saved.video_upload_key !== lesson.video_upload_key
     )
       await this.videoJobs.startTranscode(lesson.id, saved.video_upload_key);
-    return ok({ chapter_id: lesson.chapter_id }, 'Lesson updated.');
+    return ok(
+      {
+        chapter_id: lesson.chapter_id,
+        chapter_slug: chapter?.url_slug ?? null, // not in legacy: url_slug
+        url_slug: lesson.url_slug, // not in legacy
+      },
+      'Lesson updated.',
+    );
   }
 
   @Delete('lessons/:lesson')
@@ -653,7 +698,13 @@ export class ContentController {
     // security: not in legacy: the lesson's HLS video goes too (best-effort).
     await this.videoJobs.deleteHls(lesson.video_hls_path);
     await this.dropUpload(lesson);
-    return ok({ chapter_id: lesson.chapter_id }, 'Lesson deleted.');
+    return ok(
+      {
+        chapter_id: lesson.chapter_id,
+        chapter_slug: chapter?.url_slug ?? null, // not in legacy: url_slug
+      },
+      'Lesson deleted.',
+    );
   }
 
   @Get('quizzes')
@@ -688,7 +739,10 @@ export class ContentController {
   async quizStore(@CurrentUser() user: users, @Body() body: unknown) {
     const data = await laravelValidate(this.db, body, QUIZ_RULES);
     const q = await this.content.createQuiz(user, data);
-    return ok({ id: q.id }, 'Quiz created — add questions below.');
+    return ok(
+      { id: q.id, slug: q.slug },
+      'Quiz created — add questions below.',
+    );
   }
 
   @Get('quizzes/:quiz')
@@ -730,7 +784,7 @@ export class ContentController {
       is_published: ['nullable', 'boolean'],
     });
     await this.content.updateQuiz(quiz, data);
-    return ok({ id: quiz.id }, 'Quiz updated.');
+    return ok({ id: quiz.id, slug: quiz.slug }, 'Quiz updated.');
   }
 
   @Post('quizzes/:quiz/questions')
@@ -770,6 +824,9 @@ export class ContentController {
     });
     this.content.guardQuiz(user, quiz ?? null);
     await this.content.deleteQuestion(question);
-    return ok({ quiz_id: question.quiz_id }, 'Question removed.');
+    return ok(
+      { quiz_id: question.quiz_id, quiz_slug: quiz?.slug ?? null }, // quiz_slug: not in legacy
+      'Question removed.',
+    );
   }
 }

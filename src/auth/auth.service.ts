@@ -302,7 +302,13 @@ export class AuthService {
       result: {
         ...(await this.session(user, 'web')),
         // Paid plan → checkout for this subscription; otherwise the dashboard.
-        checkout: paid ? { subscription_id: sub.id, cycle } : null,
+        checkout: paid
+          ? {
+              subscription_id: sub.id,
+              subscription_public_id: sub.public_id,
+              cycle,
+            }
+          : null,
       },
       message: `Welcome to Bodhira! Your ${trialDays}-day free trial has started.`,
     };
@@ -389,19 +395,12 @@ export class AuthService {
       return payload;
     }
 
-    await this.db.transaction(async (tx) => {
-      await tx
-        .update(usersTable)
-        .set({ otp: otpHash, otp_expires_at: expires, updated_at: now })
-        .where(eq(usersTable.id, existing.id));
-      await tx
-        .insert(otp_attempts)
-        .values({ user_id: existing.id, attempts: 0, updated_at: now })
-        .onConflictDoUpdate({
-          target: otp_attempts.user_id,
-          set: { attempts: 0, updated_at: now },
-        });
-    });
+    // security: not in legacy: a new code does not reset `otp_attempts` (it used to, which
+    // gave unlimited guesses); the counter restarts only when an OTP is used up or spent.
+    await this.db
+      .update(usersTable)
+      .set({ otp: otpHash, otp_expires_at: expires, updated_at: now })
+      .where(eq(usersTable.id, existing.id));
     payload.phone = existing.phone;
     if (sms) {
       // not in legacy: the code goes out by SMS (MSG91), not awaited: neither
@@ -457,6 +456,10 @@ export class AuthService {
           .update(usersTable)
           .set({ otp: null, otp_expires_at: null })
           .where(and(eq(usersTable.id, user.id), eq(usersTable.otp, user.otp)));
+        await this.db
+          .update(otp_attempts)
+          .set({ attempts: 0, updated_at: new Date() })
+          .where(eq(otp_attempts.user_id, user.id));
         throw new ApiException(
           'Too many incorrect codes. Request a new OTP.',
           422,

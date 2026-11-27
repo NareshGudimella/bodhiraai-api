@@ -18,6 +18,7 @@ import {
   chapters,
   class_subject,
   classes,
+  lesson_progress,
   lessons,
   personal_access_tokens,
   schools,
@@ -709,6 +710,25 @@ describe('Protected media (e2e)', () => {
         .expect(200);
       return new URL(res.body.data.url).searchParams.get('t') as string;
     };
+
+    it('counts every successful play as a view, replays included (not in legacy)', async () => {
+      const views = async () =>
+        (
+          await db
+            .select({ n: lesson_progress.view_count })
+            .from(lesson_progress)
+            .where(
+              and(
+                eq(lesson_progress.student_id, u.student.id),
+                eq(lesson_progress.lesson_id, BigInt(videoLesson)),
+              ),
+            )
+        )[0]?.n ?? 0;
+      const before = await views();
+      await token();
+      await token();
+      expect(await views()).toBe(before + 2);
+    });
 
     it('rewrites the master: variant URIs point at the same route with the same token', async () => {
       const t1 = await token();

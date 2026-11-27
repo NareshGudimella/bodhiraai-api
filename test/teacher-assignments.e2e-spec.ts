@@ -420,7 +420,7 @@ describe('Teacher assignments, grading and quizzes (e2e)', () => {
       .attach('attachment', PDF, 'Work Sheet.pdf')
       .expect(201);
     expect(res.body.message).toBe('Assignment created.');
-    expect(Object.keys(res.body.data)).toEqual(['id']);
+    expect(Object.keys(res.body.data)).toEqual(['id', 'slug']);
     createdId = BigInt(res.body.data.id);
 
     const row = (await db.query.assignments.findFirst({
@@ -513,6 +513,7 @@ describe('Teacher assignments, grading and quizzes (e2e)', () => {
     );
     expect(Object.keys(mine)).toEqual([
       'id',
+      'slug',
       'title',
       'class',
       'subject',
@@ -569,6 +570,7 @@ describe('Teacher assignments, grading and quizzes (e2e)', () => {
     expect(body.data.roster).toEqual([
       {
         student_id: Number(u.s2.id),
+        student_public_id: u.s2.public_id,
         name: `Arjun ${tag}`,
         submission_id: Number(submissionId),
         status: 'submitted',
@@ -578,6 +580,7 @@ describe('Teacher assignments, grading and quizzes (e2e)', () => {
       },
       {
         student_id: Number(u.s1.id),
+        student_public_id: u.s1.public_id,
         name: `Zoya ${tag}`,
         submission_id: null,
         status: 'pending',
@@ -734,6 +737,7 @@ describe('Teacher assignments, grading and quizzes (e2e)', () => {
     const [q] = body.data;
     expect(Object.keys(q)).toEqual([
       'id',
+      'slug',
       'title',
       'subject',
       'chapter',
@@ -750,6 +754,7 @@ describe('Teacher assignments, grading and quizzes (e2e)', () => {
     );
     expect(q).toEqual({
       id: Number(ownQuizId),
+      slug: `quiz-${tag}`,
       title: `Quiz ${tag}`,
       subject: `Science ${tag}`,
       chapter: null,

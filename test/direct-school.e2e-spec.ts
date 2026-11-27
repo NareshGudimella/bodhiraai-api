@@ -351,6 +351,7 @@ describe('Bodhira Direct and school content (e2e)', () => {
       };
       const s = { ...student };
       delete s.id;
+      delete s.public_id; // per user
       delete s.name;
       return { student: s, ...rest };
     };
@@ -585,19 +586,23 @@ describe('Bodhira Direct and school content (e2e)', () => {
       );
       expect(x).toEqual({
         id: Number(sylX),
+        slug: expect.any(String),
         name: `E2E ${tag} X`,
         subjects: [
           {
             id: Number(subX.subject.id),
+            url_slug: subX.subject.url_slug,
             name: subX.subject.name,
             grade: null,
             chapters: [
               {
                 id: Number(subX.chapter.id),
+                url_slug: subX.chapter.url_slug,
                 title: subX.chapter.title,
                 lessons: [
                   {
                     id: Number(subX.video.id),
+                    url_slug: subX.video.url_slug,
                     title: subX.video.title,
                     type: 'video',
                     duration_sec: 90,

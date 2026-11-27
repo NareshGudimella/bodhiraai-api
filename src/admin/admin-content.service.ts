@@ -78,18 +78,25 @@ export class AdminContentService {
         asc(subjectsTable.name),
         asc(subjectsTable.id),
       ],
-      columns: { id: true, name: true, grade: true, syllabus_id: true },
+      columns: {
+        id: true,
+        url_slug: true,
+        name: true,
+        grade: true,
+        syllabus_id: true,
+      },
       with: {
         chapters: {
           where: (c) => eq(c.is_published, true),
           orderBy: (c) => [asc(c.sort_order), asc(c.id)],
-          columns: { id: true, title: true },
+          columns: { id: true, url_slug: true, title: true },
           with: {
             lessons: {
               where: (l) => eq(l.is_published, true),
               orderBy: (l) => [asc(l.sort_order), asc(l.id)],
               columns: {
                 id: true,
+                url_slug: true,
                 title: true,
                 type: true,
                 duration_sec: true,
@@ -105,13 +112,16 @@ export class AdminContentService {
     });
     const subject = (s: (typeof rows)[number]) => ({
       id: s.id,
+      url_slug: s.url_slug, // not in legacy
       name: s.name,
       grade: s.grade,
       chapters: s.chapters.map((c) => ({
         id: c.id,
+        url_slug: c.url_slug, // not in legacy
         title: c.title,
         lessons: c.lessons.map((l) => ({
           id: l.id,
+          url_slug: l.url_slug, // not in legacy
           title: l.title,
           type: l.type,
           duration_sec: l.duration_sec,
@@ -130,15 +140,17 @@ export class AdminContentService {
             asc(syllabi.grade),
             asc(syllabi.id),
           ],
-          columns: { id: true, name: true },
+          columns: { id: true, slug: true, name: true },
         })
       : [];
     const out: {
       id: bigint | null;
+      slug: string | null;
       name: string;
       subjects: ReturnType<typeof subject>[];
     }[] = syllabusRows.map((y) => ({
       id: y.id,
+      slug: y.slug, // not in legacy
       name: y.name,
       subjects: rows.filter((s) => s.syllabus_id === y.id).map(subject),
     }));
@@ -153,6 +165,7 @@ export class AdminContentService {
       });
       out.push({
         id: null,
+        slug: null,
         name: school?.name ?? '',
         subjects: own.map(subject),
       });

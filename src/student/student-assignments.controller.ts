@@ -1,4 +1,6 @@
+import { AssignmentVisibleGuard } from './assignment-visible.guard';
 import { SubscribedGuard } from './subscribed.guard';
+import { RateLimit } from '../common/decorators/rate-limit';
 import {
   Body,
   Controller,
@@ -132,6 +134,7 @@ export class StudentAssignmentsController {
     return ok(
       rows.map((a) => ({
         id: a.id,
+        slug: a.slug, // not in legacy
         title: a.title,
         subject: a.subjects?.name ?? null,
         class: classLabel(a.classes),
@@ -155,6 +158,7 @@ export class StudentAssignmentsController {
     return ok({
       assignment: {
         id: a.id,
+        slug: a.slug, // not in legacy
         title: a.title,
         description: a.description,
         attachment_url: signedFileUrl(a.attachment_url), // security: not in legacy: signed private-file link
@@ -172,6 +176,8 @@ export class StudentAssignmentsController {
   /** Multipart: `note` (≤2000 chars) and/or `file` (doc types, ≤50 MB). Resubmitting updates the same row. */
   @Post(':assignment/submit')
   @HttpCode(200)
+  @UseGuards(AssignmentVisibleGuard) // security: not in legacy: refused before the upload is buffered
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(FileInterceptor('file', uploadOptions(55)))
   async submit(
     @CurrentUser() user: users,

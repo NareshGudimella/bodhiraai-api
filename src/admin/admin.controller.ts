@@ -133,6 +133,7 @@ export class AdminController {
     return ok(
       items.map((u) => ({
         id: u.id,
+        public_id: u.public_id, // not in legacy
         name: u.name,
         email: u.email,
         phone: u.phone,
@@ -152,7 +153,10 @@ export class AdminController {
     const data = await laravelValidate(this.db, body, userRules());
     await this.admin.enforceSeatCap(user, data.role as string);
     const created = await this.admin.createUser(user, data);
-    return ok({ id: created.id }, 'User created.');
+    return ok(
+      { id: created.id, public_id: created.public_id },
+      'User created.',
+    );
   }
 
   /** New (not in the legacy API): seat usage panel of the legacy web create-user page. */
@@ -168,6 +172,7 @@ export class AdminController {
     await guardSameSchoolUser(this.db, user, u);
     return ok({
       id: u.id,
+      public_id: u.public_id, // not in legacy
       name: u.name,
       email: u.email,
       phone: u.phone,
@@ -196,7 +201,7 @@ export class AdminController {
       ),
     );
     const u = await this.admin.updateUser(user, target, data);
-    return ok({ id: u.id }, 'User updated.');
+    return ok({ id: u.id, public_id: u.public_id }, 'User updated.');
   }
 
   @Post('users/:user/toggle')
@@ -212,6 +217,7 @@ export class AdminController {
     return ok(
       rows.map((c) => ({
         id: c.id,
+        slug: c.slug, // not in legacy
         label: classLabel(c),
         grade: c.grade,
         section: c.section,
@@ -232,7 +238,7 @@ export class AdminController {
       class_teacher_id: ['nullable', 'exists:users,id'],
     });
     const c = await this.admin.createClass(user, data);
-    return ok({ id: c.id }, 'Class created.');
+    return ok({ id: c.id, slug: c.slug }, 'Class created.');
   }
 
   @Get('classes/:class')
@@ -265,6 +271,7 @@ export class AdminController {
       this.db
         .select({
           id: usersTable.id,
+          public_id: usersTable.public_id,
           name: usersTable.name,
           grade: usersTable.grade,
         })
@@ -283,6 +290,7 @@ export class AdminController {
       this.db
         .select({
           id: subjects.id,
+          url_slug: subjects.url_slug,
           name: subjects.name,
           grade: subjects.grade,
         })
@@ -386,6 +394,7 @@ export class AdminController {
         id: s.id,
         name: s.name,
         slug: s.slug,
+        url_slug: s.url_slug, // not in legacy
         grade: s.grade,
         icon: s.icon,
         color: s.color,

@@ -11,6 +11,8 @@ import {
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
+import { sanitizeCms } from './sanitize';
+import { RateLimit } from '../common/decorators/rate-limit';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import { CurrentUser, Roles } from '../common/decorators/auth.decorators';
@@ -156,6 +158,7 @@ export class CmsPostsController {
   }
 
   @Post()
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(AnyFilesInterceptor(uploadOptions(11, 1)))
   async store(
     @CurrentUser() user: users,
@@ -186,6 +189,7 @@ export class CmsPostsController {
   }
 
   @Patch(':post')
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(AnyFilesInterceptor(uploadOptions(11, 1)))
   async update(
     @CurrentUser() user: users,
@@ -291,6 +295,7 @@ export class CmsPostsController {
 
     if (!('slug' in data)) throw new Error('Undefined array key "slug"');
     const pick = (k: string) => (data[k] as string | null | undefined) ?? null;
+    const html = (v: string | null) => (v === null ? null : sanitizeCms(v));
     return {
       title: data.title as string,
       slug: (data.slug as string | null) || strSlug(data.title as string),
@@ -299,7 +304,7 @@ export class CmsPostsController {
           ? null
           : BigInt(toStr(data.blog_category_id)),
       excerpt: pick('excerpt'),
-      body: pick('body'),
+      body: html(pick('body')), // security: not in legacy: sanitised on save
       cover_image_url: cover,
       status: data.status as string,
       published_at: publishedAt,

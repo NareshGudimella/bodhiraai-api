@@ -8,7 +8,13 @@ import { ApiException } from '../common/http/api.exception';
 import { modelNotFound, routeId } from '../common/http/laravel';
 import { Role } from '../common/roles';
 import { DB, type Db } from '../db/db';
-import { class_subject, classes, lessons, video_sessions } from '../db/schema';
+import {
+  class_subject,
+  classes,
+  lesson_progress,
+  lessons,
+  video_sessions,
+} from '../db/schema';
 import type { lessons as Lesson, subjects, users } from '../db/types';
 import { signedFileUrl } from '../storage/file-url';
 import { StudentService } from '../student/student.service';
@@ -165,6 +171,8 @@ export class LessonPlaybackController {
       // Not a Bearer URL: native players can't send headers, so the token rides in `t`.
       const exp = Math.floor(until.getTime() / 1000);
       const token = signHlsToken(session, lesson.id, user.id, exp);
+      // not in legacy: every successful play counts as a view (replays too).
+      if (isStudent) await this.countView(user.id, lesson.id);
       return ok(
         {
           type: 'hls',
@@ -176,8 +184,11 @@ export class LessonPlaybackController {
         '',
       );
     }
-    if (lesson.type === 'video' && lesson.content_url)
+    if (lesson.type === 'video' && lesson.content_url) {
+      // not in legacy: every successful play counts as a view (replays too).
+      if (isStudent) await this.countView(user.id, lesson.id);
       return ok({ type: 'url', url: signedFileUrl(lesson.content_url) }, '');
+    }
     throw new ApiException('This lesson has no video.', 404);
   }
 
@@ -230,5 +241,28 @@ export class LessonPlaybackController {
       )
       .limit(1);
     return !!row;
+  }
+
+  /** One more view for this student and lesson (creates the progress row on a first play). */
+  private async countView(studentId: bigint, lessonId: bigint) {
+    const now = new Date();
+    await this.db
+      .insert(lesson_progress)
+      .values({
+        student_id: studentId,
+        lesson_id: lessonId,
+        view_count: 1,
+        last_viewed_at: now,
+        created_at: now,
+        updated_at: now,
+      })
+      .onConflictDoUpdate({
+        target: [lesson_progress.student_id, lesson_progress.lesson_id],
+        set: {
+          view_count: sql`${lesson_progress.view_count} + 1`,
+          last_viewed_at: now,
+          updated_at: now,
+        },
+      });
   }
 }

@@ -90,13 +90,17 @@ export class SchoolAdminsService {
       .where(eq(usersTable.id, user.id))
       .returning();
     // security: a deactivated admin is signed out everywhere.
-    if (row.status !== 'active') await this.tokens.revokeAllForUser(user.id);
+    if (row.status !== 'active') {
+      await this.tokens.revokeAllForUser(user.id);
+      await this.tokens.revokeVideoSessions(user.id); // security: not in legacy
+    }
     return row;
   }
 }
 
 export const schoolAdminResource = (u: users) => ({
   id: u.id,
+  public_id: u.public_id, // not in legacy
   name: u.name,
   email: u.email,
   phone: u.phone,

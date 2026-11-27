@@ -6,6 +6,7 @@ import { signedFileUrl } from '../storage/file-url';
 export function userResource(user: users & { schools?: schools | null }) {
   return {
     id: Number(user.id),
+    public_id: user.public_id, // not in legacy: the id for URLs
     name: user.name,
     email: user.email,
     phone: user.phone,
@@ -25,6 +26,7 @@ export function userResource(user: users & { schools?: schools | null }) {
         user.schools && !user.schools.is_direct
           ? {
               id: Number(user.schools.id),
+              slug: user.schools.slug, // not in legacy
               name: user.schools.name,
               code: user.schools.code,
               logo: signedFileUrl(user.schools.logo), // security: not in legacy: signed private-file link

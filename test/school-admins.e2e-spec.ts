@@ -190,6 +190,7 @@ describe('School Admin accounts (e2e)', () => {
         'last_login_at',
         'name',
         'phone',
+        'public_id',
         'status',
       ].sort(),
     );

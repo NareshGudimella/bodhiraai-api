@@ -41,6 +41,7 @@ function partner(u: users | null) {
   return u
     ? {
         id: u.id,
+        public_id: u.public_id, // not in legacy
         name: u.name,
         role: u.role,
         role_label: roleLabel(u.role),
@@ -167,6 +168,7 @@ export class ChatController {
         const p = preview.get(c.id);
         return {
           id: c.id,
+          public_id: c.public_id, // not in legacy
           partner: partner(
             c.user_one_id === me.id
               ? c.users_conversations_user_two_idTousers
@@ -201,7 +203,11 @@ export class ChatController {
         if (teacher) {
           out.push({
             start: 'with-teacher',
-            student: { id: child.id, name: child.name },
+            student: {
+              id: child.id,
+              public_id: child.public_id, // not in legacy
+              name: child.name,
+            },
             partner: partner(teacher),
           });
         }
@@ -225,7 +231,11 @@ export class ChatController {
             seen.add(parent.id);
             out.push({
               start: 'with-parent',
-              student: { id: enrolment.users.id, name: enrolment.users.name },
+              student: {
+                id: enrolment.users.id,
+                public_id: enrolment.users.public_id, // not in legacy
+                name: enrolment.users.name,
+              },
               partner: partner(parent),
             });
           }
@@ -260,7 +270,11 @@ export class ChatController {
         404,
       );
     const c = await this.between(me.id, teacher.id);
-    return ok({ id: c.id, partner: partner(teacher) });
+    return ok({
+      id: c.id,
+      public_id: c.public_id, // not in legacy
+      partner: partner(teacher),
+    });
   }
 
   @Post('with-parent/:student')
@@ -299,7 +313,11 @@ export class ChatController {
         404,
       );
     const c = await this.between(me.id, parent.id);
-    return ok({ id: c.id, partner: partner(parent) });
+    return ok({
+      id: c.id,
+      public_id: c.public_id, // not in legacy
+      partner: partner(parent),
+    });
   }
 
   @Get(':conversation')
@@ -329,7 +347,11 @@ export class ChatController {
         ),
       })) ?? null;
     return ok({
-      conversation: { id: c.id, partner: partner(other) },
+      conversation: {
+        id: c.id,
+        public_id: c.public_id, // not in legacy
+        partner: partner(other),
+      },
       messages: msgs.map((m) => messageItem(m, me.id)),
     });
   }

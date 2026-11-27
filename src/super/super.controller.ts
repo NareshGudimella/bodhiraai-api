@@ -11,6 +11,7 @@ import {
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
+import { RateLimit } from '../common/decorators/rate-limit';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { and, desc, eq } from 'drizzle-orm';
 import { Roles } from '../common/decorators/auth.decorators';
@@ -110,6 +111,7 @@ export class SuperController {
     return ok(
       items.map((s) => ({
         id: s.id,
+        slug: s.slug, // not in legacy
         name: s.name,
         code: s.code,
         email: s.email,
@@ -138,7 +140,7 @@ export class SuperController {
       code: ['nullable', 'string', 'max:20', 'unique:schools,code'],
     });
     const s = await this.sup.createSchool(data);
-    return ok({ id: s.id, code: s.code }, 'School created.');
+    return ok({ id: s.id, slug: s.slug, code: s.code }, 'School created.');
   }
 
   /** New (web form): active syllabi to offer, and the school's current ones. */
@@ -174,6 +176,7 @@ export class SuperController {
 
   /** New (web form, multipart): Web\SuperAdminController::schoolStore. */
   @Post('schools/web')
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(FileInterceptor('logo', uploadOptions(6)))
   async createSchoolWeb(
     @Body() body: unknown,
@@ -193,7 +196,7 @@ export class SuperController {
     if (logo)
       s = await storeOrReject('logo', () => this.sup.attachLogo(s, logo));
     return ok(
-      { id: s.id, code: s.code },
+      { id: s.id, slug: s.slug, code: s.code },
       `School ${s.name} created (code: ${s.code}).`,
     );
   }
@@ -201,6 +204,7 @@ export class SuperController {
   /** New (web form, multipart): Web\SuperAdminController::schoolUpdate. */
   @Post('schools/:school/web')
   @HttpCode(200)
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(FileInterceptor('logo', uploadOptions(6)))
   async updateSchoolWeb(
     @Param('school') raw: string,
@@ -218,7 +222,7 @@ export class SuperController {
     const s = await this.sup.updateSchool(school, data);
     if ('syllabi' in data) await this.sup.syncSyllabi(s, data.syllabi ?? []);
     if (logo) await storeOrReject('logo', () => this.sup.attachLogo(s, logo));
-    return ok({ id: school.id }, 'School updated.');
+    return ok({ id: school.id, slug: school.slug }, 'School updated.');
   }
 
   @Get('schools/:school')
@@ -231,7 +235,7 @@ export class SuperController {
     const school = await this.findSchool(raw);
     const data = await laravelValidate(this.db, body, SCHOOL_RULES);
     await this.sup.updateSchool(school, data);
-    return ok({ id: school.id }, 'School updated.');
+    return ok({ id: school.id, slug: school.slug }, 'School updated.');
   }
 
   @Post('schools/:school/toggle')
@@ -263,6 +267,7 @@ export class SuperController {
     return ok(
       items.map((u) => ({
         id: u.id,
+        public_id: u.public_id, // not in legacy
         name: u.name,
         email: u.email,
         phone: u.phone,

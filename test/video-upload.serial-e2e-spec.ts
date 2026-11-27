@@ -335,6 +335,24 @@ describe('Video upload through the API (e2e)', () => {
     );
   });
 
+  // security: not in legacy: the link is bound to the lesson as it was when issued.
+  it('a link is refused once the lesson has changed, and after a successful PUT', async () => {
+    const stale = await begin(lessonA, MP4.length);
+    await db
+      .update(lessons)
+      .set({ updated_at: new Date(Date.now() + 60_000) })
+      .where(eq(lessons.id, lessonA));
+    const before = objects.size;
+    await put(stale, MP4).expect(403);
+    expect(objects.size).toBe(before);
+
+    const url = await begin(lessonA, MP4.length);
+    await put(url, MP4).expect(200);
+    const stored = objects.size;
+    await put(url, MP4).expect(403); // reused
+    expect(objects.size).toBe(stored);
+  });
+
   it('a bad, foreign or expired token is 403', async () => {
     const url = await begin(lessonA, MP4.length);
     await put(url.replace(/t=./, 't=x'), MP4).expect(403);
@@ -357,6 +375,7 @@ describe('Video upload through the API (e2e)', () => {
         filename: 'a.mp4',
         size: MP4.length,
         type: 'video/mp4',
+        ver: '',
       },
       Date.now() - 3 * 3600_000,
     );
@@ -390,6 +409,6 @@ describe('Video upload through the API (e2e)', () => {
       'https://site.e2e.test',
     );
     expect(res.headers['access-control-allow-methods']).toContain('PUT');
-    expect(start).toHaveBeenCalledTimes(2); // only the two successful uploads
+    expect(start).toHaveBeenCalledTimes(3); // only the successful uploads
   });
 });

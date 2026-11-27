@@ -46,6 +46,7 @@ export class StudentLiveClassController {
     const status = liveStatus(lc);
     return {
       id: lc.id,
+      slug: lc.slug, // not in legacy
       title: lc.title,
       scheduled_at: iso8601(lc.scheduled_at),
       duration_min: lc.duration_min,
@@ -131,6 +132,7 @@ export class TeacherLiveClassController {
         : { type: 'school', label: 'School-wide' };
     return {
       id: lc.id,
+      slug: lc.slug, // not in legacy
       title: lc.title,
       description: lc.description,
       scheduled_at: iso8601(lc.scheduled_at),

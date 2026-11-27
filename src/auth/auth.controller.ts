@@ -22,6 +22,7 @@ import { WebHandoffService } from './web-handoff.service';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 
 /** /api/v1/auth/* — same contract as api.md §3. */
 @Controller('auth')
@@ -91,6 +92,15 @@ export class AuthController {
   @Post('login')
   @HttpCode(200)
   async login(@Body() dto: LoginDto) {
+    // security: not in legacy: per account as well as per IP (the route limit above), so
+    // password guesses spread over many addresses still stop. Counted before the lookup for
+    // any identifier, so the 429 doesn't tell whether the account exists.
+    await this.limiter.hit(
+      'login-id',
+      dto.identifier.trim().toLowerCase(),
+      10,
+      15 * MINUTE,
+    );
     return ok(await this.auth.login(dto), 'Logged in.');
   }
 
@@ -106,6 +116,8 @@ export class AuthController {
     // (the route limit above is per raw phone string, 3 a minute).
     await this.limiter.hit('otp-send-ip', client.ip ?? '', 20, HOUR);
     await this.limiter.hit('otp-send-phone', phoneKey(dto.phone), 10, HOUR);
+    // security: not in legacy: and 5 a day per phone (a send used to reset the wrong-code counter).
+    await this.limiter.hit('otp-send-day', phoneKey(dto.phone), 5, DAY);
     return ok(await this.auth.sendOtp(dto), 'OTP sent.');
   }
 
@@ -123,6 +135,10 @@ export class AuthController {
       10,
       10 * MINUTE,
     );
+    // security: not in legacy: the phone locks for 24 h after 10 wrong codes. Every attempt
+    // is counted before the code is checked (so parallel guesses each count, and unknown
+    // phones answer the same 429); a correct code uses a slot too, at most 5 a day (sends).
+    await this.limiter.hit('otp-wrong', phoneKey(dto.phone), 10, DAY);
     return ok(await this.auth.verifyOtp(dto), 'Phone verified.');
   }
 

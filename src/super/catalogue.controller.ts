@@ -10,6 +10,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { insertWithSlug, SLUG_WORD } from '../common/slug';
 import { and, count, eq, isNull } from 'drizzle-orm';
 import { Roles } from '../common/decorators/auth.decorators';
 import { ApiException } from '../common/http/api.exception';
@@ -153,7 +154,7 @@ export class CatalogueController {
         updated_at: now,
       })
       .returning();
-    return ok({ id: s.id }, `Syllabus '${s.name}' created.`);
+    return ok({ id: s.id, slug: s.slug }, `Syllabus '${s.name}' created.`);
   }
 
   @Get('syllabi/:syllabus')
@@ -187,7 +188,7 @@ export class CatalogueController {
         .set({ ...fields, updated_at: new Date() })
         .where(eq(syllabiTable.id, s.id));
     }
-    return ok({ id: s.id }, 'Syllabus updated.');
+    return ok({ id: s.id, slug: s.slug }, 'Syllabus updated.');
   }
 
   @Delete('syllabi/:syllabus')
@@ -208,23 +209,36 @@ export class CatalogueController {
     });
     const name = data.name as string;
     const now = new Date();
-    const [subject] = await this.db
-      .insert(subjects)
-      .values({
-        syllabus_id: s.id,
-        school_id: null,
-        name,
-        slug: `${strSlug(name)}-${strRandom(4)}`,
-        grade: s.grade,
-        icon: (data.icon as string | null | undefined) ?? '📘',
-        color: (data.color as string | null | undefined) ?? '#C49560',
-        description: (data.description as string | null | undefined) ?? null,
-        is_active: true,
-        created_at: now,
-        updated_at: now,
-      })
-      .returning();
-    return ok({ id: subject.id }, 'Subject added to syllabus.');
+    const [subject] = await insertWithSlug(
+      this.db,
+      subjects,
+      subjects.url_slug,
+      name,
+      SLUG_WORD.subject,
+      (url_slug) =>
+        this.db
+          .insert(subjects)
+          .values({
+            url_slug,
+            syllabus_id: s.id,
+            school_id: null,
+            name,
+            slug: `${strSlug(name)}-${strRandom(4)}`,
+            grade: s.grade,
+            icon: (data.icon as string | null | undefined) ?? '📘',
+            color: (data.color as string | null | undefined) ?? '#C49560',
+            description:
+              (data.description as string | null | undefined) ?? null,
+            is_active: true,
+            created_at: now,
+            updated_at: now,
+          })
+          .returning(),
+    );
+    return ok(
+      { id: subject.id, url_slug: subject.url_slug },
+      'Subject added to syllabus.',
+    );
   }
 
   @Get('syllabi/:syllabus/subjects/:subject')
@@ -268,7 +282,7 @@ export class CatalogueController {
       description: ['nullable', 'string'],
     });
     const c = await this.content.createChapter(subject, data);
-    return ok({ id: c.id }, 'Chapter added.');
+    return ok({ id: c.id, url_slug: c.url_slug }, 'Chapter added.');
   }
 
   // ── Plans ──
@@ -352,11 +366,20 @@ export class CatalogueController {
   async planStore(@Body() body: unknown) {
     const data = await this.validatePlan(body);
     const now = new Date();
-    const [p] = await this.db
-      .insert(plansTable)
-      .values({ ...this.planPayload(data), created_at: now, updated_at: now })
-      .returning();
-    return ok({ id: p.id }, 'Plan created.');
+    const payload = this.planPayload(data);
+    const [p] = await insertWithSlug(
+      this.db,
+      plansTable,
+      plansTable.slug,
+      payload.name,
+      SLUG_WORD.plan,
+      (slug) =>
+        this.db
+          .insert(plansTable)
+          .values({ ...payload, slug, created_at: now, updated_at: now })
+          .returning(),
+    );
+    return ok({ id: p.id, slug: p.slug }, 'Plan created.');
   }
 
   @Patch('plans/:plan')
@@ -370,7 +393,7 @@ export class CatalogueController {
         .set({ ...fields, updated_at: new Date() })
         .where(eq(plansTable.id, plan.id));
     }
-    return ok({ id: plan.id }, 'Plan updated.');
+    return ok({ id: plan.id, slug: plan.slug }, 'Plan updated.');
   }
 
   @Delete('plans/:plan')

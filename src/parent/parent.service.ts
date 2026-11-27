@@ -97,6 +97,7 @@ export class ParentService {
   async childrenList(parent: users) {
     return (await this.children(parent)).map((p) => ({
       id: p.users_parent_student_student_idTousers.id,
+      public_id: p.users_parent_student_student_idTousers.public_id, // not in legacy
       name: p.users_parent_student_student_idTousers.name,
       grade: p.users_parent_student_student_idTousers.grade,
       relation: p.relation,
@@ -111,6 +112,7 @@ export class ParentService {
       type: string;
       child: string;
       child_id: bigint;
+      child_public_id: string;
       message: string;
     }[] = [];
     const cards = [];
@@ -123,6 +125,7 @@ export class ParentService {
           child: child.name,
           // Not in legacy: lets apps link an alert to the right child.
           child_id: child.id,
+          child_public_id: child.public_id, // not in legacy
           message: `Attendance dropped to ${s.attendance_percent}%`,
         });
       }
@@ -132,6 +135,7 @@ export class ParentService {
           child: child.name,
           // Not in legacy: lets apps link an alert to the right child.
           child_id: child.id,
+          child_public_id: child.public_id, // not in legacy
           message: `Average quiz score is ${s.avg_quiz_percent}%`,
         });
       }
@@ -141,6 +145,7 @@ export class ParentService {
           child: child.name,
           // Not in legacy: lets apps link an alert to the right child.
           child_id: child.id,
+          child_public_id: child.public_id, // not in legacy
           message: `${s.pending_assignments} assignment(s) pending`,
         });
       }
@@ -154,6 +159,7 @@ export class ParentService {
         : null;
       cards.push({
         id: child.id,
+        public_id: child.public_id, // not in legacy
         name: child.name,
         grade: child.grade,
         avatar_letter: asciiUpper([...child.name][0] ?? ''),
@@ -167,6 +173,7 @@ export class ParentService {
     return {
       parent: {
         id: parent.id,
+        public_id: parent.public_id, // not in legacy
         name: parent.name,
         children_count: links.length,
       },
@@ -355,6 +362,7 @@ export class ParentService {
         const avg = avgPct(group);
         return {
           subject_id: Number(subjectId),
+          subject_slug: subject?.url_slug ?? null, // not in legacy
           subject: subject?.name ?? 'Unknown',
           icon: subject?.icon ?? null,
           color: subject?.color ?? null,
@@ -421,6 +429,7 @@ export class ParentService {
       const due = a.due_date;
       return {
         id: a.id,
+        slug: a.slug, // not in legacy
         title: a.title,
         subject: a.subjects?.name ?? null,
         class: a.classes ? classLabel(a.classes) : null,

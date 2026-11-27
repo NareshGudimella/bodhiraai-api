@@ -76,6 +76,9 @@ export const ai_chat_sessions = pgTable(
     id: bigint('id', { mode: 'bigint' })
       .primaryKey()
       .generatedByDefaultAsIdentity(),
+    public_id: text('public_id')
+      .notNull()
+      .default(sql`bodhira_public_id()`),
     user_id: bigint('user_id', { mode: 'bigint' }).notNull(),
     title: citext('title'),
     mode: citext('mode').notNull().default('chat'),
@@ -87,6 +90,7 @@ export const ai_chat_sessions = pgTable(
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
   },
   (t) => [
+    uniqueIndex('ai_chat_sessions_public_id_unique').on(t.public_id),
     foreignKey({
       name: 'ai_chat_sessions_user_id_foreign',
       columns: [t.user_id],
@@ -187,6 +191,7 @@ export const assignments = pgTable(
     id: bigint('id', { mode: 'bigint' })
       .primaryKey()
       .generatedByDefaultAsIdentity(),
+    slug: citext('slug').notNull().default(''),
     class_id: bigint('class_id', { mode: 'bigint' }).notNull(),
     subject_id: bigint('subject_id', { mode: 'bigint' }),
     teacher_id: bigint('teacher_id', { mode: 'bigint' }).notNull(),
@@ -200,6 +205,7 @@ export const assignments = pgTable(
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
   },
   (t) => [
+    uniqueIndex('assignments_slug_unique').on(t.slug),
     foreignKey({
       name: 'assignments_class_id_foreign',
       columns: [t.class_id],
@@ -406,6 +412,7 @@ export const chapters = pgTable(
     id: bigint('id', { mode: 'bigint' })
       .primaryKey()
       .generatedByDefaultAsIdentity(),
+    url_slug: citext('url_slug').notNull().default(''),
     subject_id: bigint('subject_id', { mode: 'bigint' }).notNull(),
     title: citext('title').notNull(),
     slug: citext('slug').notNull(),
@@ -416,6 +423,7 @@ export const chapters = pgTable(
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
   },
   (t) => [
+    uniqueIndex('chapters_url_slug_unique').on(t.url_slug),
     foreignKey({
       name: 'chapters_subject_id_foreign',
       columns: [t.subject_id],
@@ -499,6 +507,7 @@ export const classes = pgTable(
     id: bigint('id', { mode: 'bigint' })
       .primaryKey()
       .generatedByDefaultAsIdentity(),
+    slug: citext('slug').notNull().default(''),
     school_id: bigint('school_id', { mode: 'bigint' }).notNull(),
     grade: citext('grade').notNull(),
     section: citext('section').notNull(),
@@ -508,6 +517,7 @@ export const classes = pgTable(
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
   },
   (t) => [
+    uniqueIndex('classes_slug_unique').on(t.slug),
     foreignKey({
       name: 'classes_class_teacher_id_foreign',
       columns: [t.class_teacher_id],
@@ -555,6 +565,9 @@ export const conversations = pgTable(
     id: bigint('id', { mode: 'bigint' })
       .primaryKey()
       .generatedByDefaultAsIdentity(),
+    public_id: text('public_id')
+      .notNull()
+      .default(sql`bodhira_public_id()`),
     user_one_id: bigint('user_one_id', { mode: 'bigint' }).notNull(),
     user_two_id: bigint('user_two_id', { mode: 'bigint' }).notNull(),
     last_message_at: timestamp('last_message_at', {
@@ -565,6 +578,7 @@ export const conversations = pgTable(
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
   },
   (t) => [
+    uniqueIndex('conversations_public_id_unique').on(t.public_id),
     foreignKey({
       name: 'conversations_user_one_id_foreign',
       columns: [t.user_one_id],
@@ -669,32 +683,46 @@ export const failed_jobs = pgTable(
   ],
 );
 
-export const faqs = pgTable('faqs', {
-  id: bigint('id', { mode: 'bigint' })
-    .primaryKey()
-    .generatedByDefaultAsIdentity(),
-  category: citext('category'),
-  question: citext('question').notNull(),
-  answer: text('answer').notNull(),
-  sort_order: integer('sort_order').notNull().default(0),
-  is_active: boolean('is_active').notNull().default(true),
-  created_at: timestamp('created_at', { mode: 'date', precision: 0 }),
-  updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
-});
+export const faqs = pgTable(
+  'faqs',
+  {
+    id: bigint('id', { mode: 'bigint' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity(),
+    public_id: text('public_id')
+      .notNull()
+      .default(sql`bodhira_public_id()`),
+    category: citext('category'),
+    question: citext('question').notNull(),
+    answer: text('answer').notNull(),
+    sort_order: integer('sort_order').notNull().default(0),
+    is_active: boolean('is_active').notNull().default(true),
+    created_at: timestamp('created_at', { mode: 'date', precision: 0 }),
+    updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
+  },
+  (t) => [uniqueIndex('faqs_public_id_unique').on(t.public_id)],
+);
 
-export const features = pgTable('features', {
-  id: bigint('id', { mode: 'bigint' })
-    .primaryKey()
-    .generatedByDefaultAsIdentity(),
-  icon: citext('icon'),
-  title: citext('title').notNull(),
-  description: citext('description'),
-  color: citext('color'),
-  sort_order: integer('sort_order').notNull().default(0),
-  is_active: boolean('is_active').notNull().default(true),
-  created_at: timestamp('created_at', { mode: 'date', precision: 0 }),
-  updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
-});
+export const features = pgTable(
+  'features',
+  {
+    id: bigint('id', { mode: 'bigint' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity(),
+    public_id: text('public_id')
+      .notNull()
+      .default(sql`bodhira_public_id()`),
+    icon: citext('icon'),
+    title: citext('title').notNull(),
+    description: citext('description'),
+    color: citext('color'),
+    sort_order: integer('sort_order').notNull().default(0),
+    is_active: boolean('is_active').notNull().default(true),
+    created_at: timestamp('created_at', { mode: 'date', precision: 0 }),
+    updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
+  },
+  (t) => [uniqueIndex('features_public_id_unique').on(t.public_id)],
+);
 
 export const invoices = pgTable(
   'invoices',
@@ -702,6 +730,9 @@ export const invoices = pgTable(
     id: bigint('id', { mode: 'bigint' })
       .primaryKey()
       .generatedByDefaultAsIdentity(),
+    public_id: text('public_id')
+      .notNull()
+      .default(sql`bodhira_public_id()`),
     number: citext('number').notNull(),
     user_id: bigint('user_id', { mode: 'bigint' }),
     school_id: bigint('school_id', { mode: 'bigint' }),
@@ -731,6 +762,7 @@ export const invoices = pgTable(
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
   },
   (t) => [
+    uniqueIndex('invoices_public_id_unique').on(t.public_id),
     uniqueIndex('invoices_number_unique').on(t.number),
     foreignKey({
       name: 'invoices_payment_id_foreign',
@@ -802,6 +834,8 @@ export const lesson_progress = pgTable(
       .notNull()
       .default(0),
     progress_percent: smallint('progress_percent').notNull().default(0),
+    // not in legacy: every play counts, replays too (completion is recorded once).
+    view_count: integer('view_count').notNull().default(0),
     last_viewed_at: timestamp('last_viewed_at', { mode: 'date', precision: 0 }),
     completed_at: timestamp('completed_at', { mode: 'date', precision: 0 }),
     created_at: timestamp('created_at', { mode: 'date', precision: 0 }),
@@ -834,6 +868,7 @@ export const lessons = pgTable(
     id: bigint('id', { mode: 'bigint' })
       .primaryKey()
       .generatedByDefaultAsIdentity(),
+    url_slug: citext('url_slug').notNull().default(''),
     chapter_id: bigint('chapter_id', { mode: 'bigint' }).notNull(),
     title: citext('title').notNull(),
     slug: citext('slug').notNull(),
@@ -863,6 +898,7 @@ export const lessons = pgTable(
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
   },
   (t) => [
+    uniqueIndex('lessons_url_slug_unique').on(t.url_slug),
     foreignKey({
       name: 'lessons_chapter_id_foreign',
       columns: [t.chapter_id],
@@ -910,6 +946,7 @@ export const live_classes = pgTable(
     id: bigint('id', { mode: 'bigint' })
       .primaryKey()
       .generatedByDefaultAsIdentity(),
+    slug: citext('slug').notNull().default(''),
     host_id: bigint('host_id', { mode: 'bigint' }).notNull(),
     school_id: bigint('school_id', { mode: 'bigint' }),
     class_id: bigint('class_id', { mode: 'bigint' }),
@@ -932,6 +969,7 @@ export const live_classes = pgTable(
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
   },
   (t) => [
+    uniqueIndex('live_classes_slug_unique').on(t.slug),
     foreignKey({
       name: 'live_classes_class_id_foreign',
       columns: [t.class_id],
@@ -1309,6 +1347,7 @@ export const plans = pgTable(
     id: bigint('id', { mode: 'bigint' })
       .primaryKey()
       .generatedByDefaultAsIdentity(),
+    slug: citext('slug').notNull().default(''),
     key: citext('key').notNull(),
     audience: citext('audience').notNull().default('individual'),
     name: citext('name').notNull(),
@@ -1328,7 +1367,10 @@ export const plans = pgTable(
     created_at: timestamp('created_at', { mode: 'date', precision: 0 }),
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
   },
-  (t) => [uniqueIndex('plans_key_unique').on(t.key)],
+  (t) => [
+    uniqueIndex('plans_slug_unique').on(t.slug),
+    uniqueIndex('plans_key_unique').on(t.key),
+  ],
 );
 
 export const questions = pgTable(
@@ -1397,6 +1439,9 @@ export const quiz_attempts = pgTable(
     id: bigint('id', { mode: 'bigint' })
       .primaryKey()
       .generatedByDefaultAsIdentity(),
+    public_id: text('public_id')
+      .notNull()
+      .default(sql`bodhira_public_id()`),
     quiz_id: bigint('quiz_id', { mode: 'bigint' }).notNull(),
     student_id: bigint('student_id', { mode: 'bigint' }).notNull(),
     status: citext('status').notNull().default('in_progress'),
@@ -1408,6 +1453,7 @@ export const quiz_attempts = pgTable(
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
   },
   (t) => [
+    uniqueIndex('quiz_attempts_public_id_unique').on(t.public_id),
     foreignKey({
       name: 'quiz_attempts_quiz_id_foreign',
       columns: [t.quiz_id],
@@ -1431,6 +1477,7 @@ export const quizzes = pgTable(
     id: bigint('id', { mode: 'bigint' })
       .primaryKey()
       .generatedByDefaultAsIdentity(),
+    slug: citext('slug').notNull().default(''),
     school_id: bigint('school_id', { mode: 'bigint' }),
     subject_id: bigint('subject_id', { mode: 'bigint' }),
     chapter_id: bigint('chapter_id', { mode: 'bigint' }),
@@ -1450,6 +1497,7 @@ export const quizzes = pgTable(
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
   },
   (t) => [
+    uniqueIndex('quizzes_slug_unique').on(t.slug),
     foreignKey({
       name: 'quizzes_chapter_id_foreign',
       columns: [t.chapter_id],
@@ -1613,19 +1661,26 @@ export const site_settings = pgTable(
   ],
 );
 
-export const social_links = pgTable('social_links', {
-  id: bigint('id', { mode: 'bigint' })
-    .primaryKey()
-    .generatedByDefaultAsIdentity(),
-  platform: citext('platform').notNull(),
-  label: citext('label'),
-  url: citext('url').notNull(),
-  icon: citext('icon'),
-  sort_order: integer('sort_order').notNull().default(0),
-  is_active: boolean('is_active').notNull().default(true),
-  created_at: timestamp('created_at', { mode: 'date', precision: 0 }),
-  updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
-});
+export const social_links = pgTable(
+  'social_links',
+  {
+    id: bigint('id', { mode: 'bigint' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity(),
+    public_id: text('public_id')
+      .notNull()
+      .default(sql`bodhira_public_id()`),
+    platform: citext('platform').notNull(),
+    label: citext('label'),
+    url: citext('url').notNull(),
+    icon: citext('icon'),
+    sort_order: integer('sort_order').notNull().default(0),
+    is_active: boolean('is_active').notNull().default(true),
+    created_at: timestamp('created_at', { mode: 'date', precision: 0 }),
+    updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
+  },
+  (t) => [uniqueIndex('social_links_public_id_unique').on(t.public_id)],
+);
 
 export const student_enquiries = pgTable(
   'student_enquiries',
@@ -1654,6 +1709,7 @@ export const subjects = pgTable(
     id: bigint('id', { mode: 'bigint' })
       .primaryKey()
       .generatedByDefaultAsIdentity(),
+    url_slug: citext('url_slug').notNull().default(''),
     school_id: bigint('school_id', { mode: 'bigint' }),
     syllabus_id: bigint('syllabus_id', { mode: 'bigint' }),
     name: citext('name').notNull(),
@@ -1668,6 +1724,7 @@ export const subjects = pgTable(
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
   },
   (t) => [
+    uniqueIndex('subjects_url_slug_unique').on(t.url_slug),
     foreignKey({
       name: 'subjects_school_id_foreign',
       columns: [t.school_id],
@@ -1694,6 +1751,9 @@ export const subscriptions = pgTable(
     id: bigint('id', { mode: 'bigint' })
       .primaryKey()
       .generatedByDefaultAsIdentity(),
+    public_id: text('public_id')
+      .notNull()
+      .default(sql`bodhira_public_id()`),
     subscribable_type: citext('subscribable_type').notNull(),
     subscribable_id: bigint('subscribable_id', { mode: 'bigint' }).notNull(),
     plan: citext('plan').notNull(),
@@ -1707,6 +1767,7 @@ export const subscriptions = pgTable(
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
   },
   (t) => [
+    uniqueIndex('subscriptions_public_id_unique').on(t.public_id),
     foreignKey({
       name: 'subscriptions_source_payment_id_foreign',
       columns: [t.source_payment_id],
@@ -1756,39 +1817,53 @@ export const tags = pgTable(
   (t) => [uniqueIndex('tags_slug_unique').on(t.slug)],
 );
 
-export const team_members = pgTable('team_members', {
-  id: bigint('id', { mode: 'bigint' })
-    .primaryKey()
-    .generatedByDefaultAsIdentity(),
-  name: citext('name').notNull(),
-  role: citext('role'),
-  photo_url: citext('photo_url'),
-  bio: text('bio'),
-  socials: text('socials'),
-  sort_order: integer('sort_order').notNull().default(0),
-  is_active: boolean('is_active').notNull().default(true),
-  created_at: timestamp('created_at', { mode: 'date', precision: 0 }),
-  updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
-  deleted_at: timestamp('deleted_at', { mode: 'date', precision: 0 }),
-});
+export const team_members = pgTable(
+  'team_members',
+  {
+    id: bigint('id', { mode: 'bigint' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity(),
+    public_id: text('public_id')
+      .notNull()
+      .default(sql`bodhira_public_id()`),
+    name: citext('name').notNull(),
+    role: citext('role'),
+    photo_url: citext('photo_url'),
+    bio: text('bio'),
+    socials: text('socials'),
+    sort_order: integer('sort_order').notNull().default(0),
+    is_active: boolean('is_active').notNull().default(true),
+    created_at: timestamp('created_at', { mode: 'date', precision: 0 }),
+    updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
+    deleted_at: timestamp('deleted_at', { mode: 'date', precision: 0 }),
+  },
+  (t) => [uniqueIndex('team_members_public_id_unique').on(t.public_id)],
+);
 
-export const testimonials = pgTable('testimonials', {
-  id: bigint('id', { mode: 'bigint' })
-    .primaryKey()
-    .generatedByDefaultAsIdentity(),
-  name: citext('name').notNull(),
-  role: citext('role'),
-  company: citext('company'),
-  avatar_url: citext('avatar_url'),
-  quote: text('quote').notNull(),
-  rating: smallint('rating').notNull().default(5),
-  sort_order: integer('sort_order').notNull().default(0),
-  is_featured: boolean('is_featured').notNull().default(false),
-  is_active: boolean('is_active').notNull().default(true),
-  created_at: timestamp('created_at', { mode: 'date', precision: 0 }),
-  updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
-  deleted_at: timestamp('deleted_at', { mode: 'date', precision: 0 }),
-});
+export const testimonials = pgTable(
+  'testimonials',
+  {
+    id: bigint('id', { mode: 'bigint' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity(),
+    public_id: text('public_id')
+      .notNull()
+      .default(sql`bodhira_public_id()`),
+    name: citext('name').notNull(),
+    role: citext('role'),
+    company: citext('company'),
+    avatar_url: citext('avatar_url'),
+    quote: text('quote').notNull(),
+    rating: smallint('rating').notNull().default(5),
+    sort_order: integer('sort_order').notNull().default(0),
+    is_featured: boolean('is_featured').notNull().default(false),
+    is_active: boolean('is_active').notNull().default(true),
+    created_at: timestamp('created_at', { mode: 'date', precision: 0 }),
+    updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
+    deleted_at: timestamp('deleted_at', { mode: 'date', precision: 0 }),
+  },
+  (t) => [uniqueIndex('testimonials_public_id_unique').on(t.public_id)],
+);
 
 export const users = pgTable(
   'users',
@@ -1796,6 +1871,9 @@ export const users = pgTable(
     id: bigint('id', { mode: 'bigint' })
       .primaryKey()
       .generatedByDefaultAsIdentity(),
+    public_id: text('public_id')
+      .notNull()
+      .default(sql`bodhira_public_id()`),
     school_id: bigint('school_id', { mode: 'bigint' }),
     syllabus_id: bigint('syllabus_id', { mode: 'bigint' }),
     name: citext('name').notNull(),
@@ -1826,6 +1904,7 @@ export const users = pgTable(
     updated_at: timestamp('updated_at', { mode: 'date', precision: 0 }),
   },
   (t) => [
+    uniqueIndex('users_public_id_unique').on(t.public_id),
     uniqueIndex('users_email_unique').on(t.email),
     uniqueIndex('users_phone_unique').on(t.phone),
     uniqueIndex('users_username_unique').on(t.username),

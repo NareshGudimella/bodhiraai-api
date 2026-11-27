@@ -182,6 +182,8 @@ export class RosterService {
       })
       .where(eq(usersTable.id, student.id))
       .returning();
+    // security: not in legacy: a password set by the teacher ends the student's sessions.
+    if (input.password) await this.tokens.revokeAllForUser(student.id);
     if (input.avatarUrl) await this.storage.delete(student.avatar);
     await this.db
       .update(class_student)
@@ -212,7 +214,11 @@ export class RosterService {
       .where(eq(usersTable.id, student.id))
       .returning();
     // security: not in legacy — a blocked or on-hold student is signed out everywhere.
-    if (status !== 'active') await this.tokens.revokeAllForUser(student.id);
+    if (status !== 'active') {
+      await this.tokens.revokeAllForUser(student.id);
+      // security: not in legacy: and their open video sessions.
+      await this.tokens.revokeVideoSessions(student.id);
+    }
     return updated;
   }
 
@@ -282,6 +288,7 @@ export class RosterService {
       attendance,
       ai_activity: sessions.map((s) => ({
         id: s.id,
+        public_id: s.public_id, // not in legacy
         title: s.title || 'Untitled chat',
         mode: s.mode,
         messages_count: s.messages_count,
@@ -289,6 +296,7 @@ export class RosterService {
       })),
       parents: parents.map((p) => ({
         id: p.users_parent_student_parent_idTousers.id,
+        public_id: p.users_parent_student_parent_idTousers.public_id, // not in legacy
         name: p.users_parent_student_parent_idTousers.name,
         avatar: signedFileUrl(p.users_parent_student_parent_idTousers.avatar), // security: not in legacy: signed private-file link
         relation: p.relation,

@@ -74,13 +74,29 @@ describe('AdminService seat caps (Web\\AdminController::enforceSeatCap)', () => 
 });
 
 describe('AdminService.updateUser role lock', () => {
-  it('never rewrites the role of an admin account', async () => {
+  it('never rewrites the role of an admin account (their own)', async () => {
     const { db, updates } = fakeDb(null, {});
     const svc = new AdminService(db, {} as never, {} as never);
-    const target = { id: 9n, school_id: 5n, role: 'admin' } as users;
+    const target = { id: 1n, school_id: 5n, role: 'admin' } as users;
     await svc.updateUser(admin, target, { name: 'New', role: 'student' });
     expect(updates[0]).toMatchObject({ name: 'New' });
     expect(updates[0]).not.toHaveProperty('role');
+  });
+
+  // security: not in legacy: peer admins and super admins are off limits.
+  it('refuses to edit or toggle a peer admin or a super admin (403)', async () => {
+    const { db, updates } = fakeDb(null, {});
+    const svc = new AdminService(db, {} as never, {} as never);
+    for (const role of ['admin', 'super_admin']) {
+      const target = { id: 9n, school_id: 5n, role } as users;
+      await expect(
+        svc.updateUser(admin, target, { name: 'X' }),
+      ).rejects.toMatchObject({ status: 403 });
+      await expect(svc.toggleUser(admin, target)).rejects.toMatchObject({
+        status: 403,
+      });
+    }
+    expect(updates).toHaveLength(0);
   });
 
   it('still lets a student become a teacher', async () => {

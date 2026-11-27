@@ -129,7 +129,11 @@ describe('Payment verification (e2e)', () => {
       cycle: 'yearly',
     }).expect(201);
     expect(body.data).toEqual({
-      checkout: { subscription_id: Number(saved[0].id), cycle: 'yearly' },
+      checkout: {
+        subscription_id: Number(saved[0].id),
+        subscription_public_id: saved[0].public_id,
+        cycle: 'yearly',
+      },
     });
     expect(body.message).toBe(
       'Complete your payment to activate Individual Premium (yearly).',
@@ -232,6 +236,34 @@ describe('Payment verification (e2e)', () => {
     expect(await db.$count(invoices, gt(invoices.id, maxInvoice))).toBe(1);
     await post(`/billing/checkout/${id}/complete`, body).expect(422);
     expect(await db.$count(invoices, gt(invoices.id, maxInvoice))).toBe(1);
+  });
+
+  // security: not in legacy: two parallel completes of one paid order issue one invoice.
+  it('a second parallel complete of the same order issues no second invoice', async () => {
+    const id = saved[0].id;
+    const order = await request(app.getHttpServer())
+      .get(`/api/v1/billing/checkout/${id}?cycle=yearly`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    const orderId = order.body.data.order_id as string;
+    const before = await db.$count(invoices, gt(invoices.id, maxInvoice));
+    const body = {
+      cycle: 'yearly',
+      razorpay_order_id: orderId,
+      razorpay_payment_id: 'pay_race',
+      razorpay_signature: sign(orderId, 'pay_race'),
+    };
+    const results = await Promise.all([
+      post(`/billing/checkout/${id}/complete`, body),
+      post(`/billing/checkout/${id}/complete`, body),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 422]);
+    expect(results.find((r) => r.status === 422)?.body.code).toBe(
+      'payment_unverified',
+    );
+    expect(await db.$count(invoices, gt(invoices.id, maxInvoice))).toBe(
+      before + 1,
+    );
   });
 
   it('refuses demo completion when another gateway is live', async () => {

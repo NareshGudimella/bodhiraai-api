@@ -94,11 +94,13 @@ export class SchoolWebController {
         isParent
           ? {
               id: usersTable.id,
+              public_id: usersTable.public_id,
               name: usersTable.name,
               grade: usersTable.grade,
             }
           : {
               id: usersTable.id,
+              public_id: usersTable.public_id,
               name: usersTable.name,
               phone: usersTable.phone,
             },
@@ -274,7 +276,7 @@ export class SchoolWebController {
       counts.map((c) => [String(c.syllabus_id), c.n]),
     );
     return ok({
-      school: { id: school.id, name: school.name },
+      school: { id: school.id, slug: school.slug, name: school.name },
       syllabi: syllabi.map((s) => ({
         ...toModel('syllabi', s),
         subjects_count: countOfSyllabus.get(String(s.id)) ?? 0,

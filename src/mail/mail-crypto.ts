@@ -49,7 +49,9 @@ export function decryptSecret(
     .split('.')
     .map((p) => Buffer.from(p, 'base64url'));
   if (!iv || !tag || !data) throw new Error('Malformed secret.');
-  const decipher = createDecipheriv('aes-256-gcm', mailKey(env), iv);
+  const decipher = createDecipheriv('aes-256-gcm', mailKey(env), iv, {
+    authTagLength: 16, // security: not in legacy: a shortened tag would weaken the forgery check
+  });
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(data), decipher.final()]).toString(
     'utf8',

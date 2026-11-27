@@ -103,6 +103,7 @@ export class AccountController {
 
   @Post('profile')
   @HttpCode(200)
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(FileInterceptor('avatar', uploadOptions(12)))
   async profile(
     @CurrentUser() user: users,

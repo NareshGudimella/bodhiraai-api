@@ -17,6 +17,19 @@ describe('mail-crypto', () => {
     expect(encryptSecret('s3cret-pässword', env)).not.toBe(stored);
   });
 
+  // security: not in legacy: a shortened GCM tag is refused (authTagLength is pinned to 16).
+  it('rejects a truncated authentication tag', () => {
+    const stored = encryptSecret('x', env);
+    const [iv, tag, data] = stored.slice(3).split('.');
+    const short = Buffer.from(tag, 'base64url').subarray(0, 4);
+    expect(() =>
+      decryptSecret(
+        `${stored.slice(0, 3)}${iv}.${short.toString('base64url')}.${data}`,
+        env,
+      ),
+    ).toThrow();
+  });
+
   it('accepts a hex APP_SECRET and rejects tampering or the wrong key', () => {
     const hex = { NODE_ENV: 'test', APP_SECRET: 'ab'.repeat(32) };
     expect(decryptSecret(encryptSecret('x', hex), hex)).toBe('x');

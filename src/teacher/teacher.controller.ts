@@ -10,6 +10,7 @@ import {
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
+import { RateLimit } from '../common/decorators/rate-limit';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser, Roles } from '../common/decorators/auth.decorators';
 import { ok } from '../common/http/api-response';
@@ -59,6 +60,7 @@ export class TeacherController {
     return ok(
       rows.map((c) => ({
         id: c.id,
+        slug: c.slug, // not in legacy
         label: classLabel(c),
         grade: c.grade,
         section: c.section,
@@ -121,6 +123,7 @@ export class TeacherController {
     return ok(
       rows.map((a) => ({
         id: a.id,
+        slug: a.slug, // not in legacy
         title: a.title,
         class: a.classes ? classLabel(a.classes) : null,
         subject: a.subjects?.name ?? null,
@@ -139,6 +142,7 @@ export class TeacherController {
    * `attachment_url` still works; an uploaded file wins over it, as in the web form.
    */
   @Post('assignments')
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(FileInterceptor('attachment', uploadOptions(55)))
   async createAssignment(
     @CurrentUser() user: users,
@@ -189,7 +193,7 @@ export class TeacherController {
         ? parseLaravelDate(data.due_date)!.stored
         : null;
     const a = await this.teachers.createAssignment(user, data, due);
-    return ok({ id: a.id }, 'Assignment created.');
+    return ok({ id: a.id, slug: a.slug }, 'Assignment created.');
   }
 
   @Get('assignments/:assignment')
@@ -242,6 +246,7 @@ export class TeacherController {
     return ok(
       rows.map((q) => ({
         id: q.id,
+        slug: q.slug, // not in legacy
         title: q.title,
         subject: q.subjects?.name ?? null,
         chapter: q.chapters?.title ?? null,

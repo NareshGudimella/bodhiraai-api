@@ -269,6 +269,7 @@ describe('Admin analytics and super AI usage (e2e)', () => {
     ]);
     expect(Object.keys(body.data.classes[0])).toEqual([
       'id',
+      'slug',
       'label',
       'students',
       'attendance_percent',

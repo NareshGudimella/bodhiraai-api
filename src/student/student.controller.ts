@@ -208,11 +208,14 @@ export class StudentController {
       routeId(raw, 'Chapter'),
     );
     const lessons = await this.service.lessonsFor(chapter.id);
+    const subject = await this.service.findSubject(chapter.subject_id);
     return ok({
       chapter: {
         id: chapter.id,
         title: chapter.title,
+        url_slug: chapter.url_slug, // not in legacy
         subject_id: chapter.subject_id,
+        subject_slug: subject?.url_slug ?? null, // not in legacy: the subject's url_slug
       },
       lessons: lessons.map((l) => lessonResource(l)),
       // New, additive: completion + chapter-quiz unlock state (legacy web-only data).
@@ -291,6 +294,7 @@ export class StudentController {
       {
         attempt: {
           id: attempt.id,
+          public_id: attempt.public_id, // not in legacy
           status: attempt.status,
           started_at: iso8601(attempt.started_at),
         },
@@ -332,6 +336,7 @@ export class StudentController {
     return ok(
       {
         attempt_id: result.id,
+        attempt_public_id: result.public_id, // not in legacy
         score: result.score,
         total_marks: result.total_marks,
         percent:
@@ -358,6 +363,7 @@ export class StudentController {
     const reveal = a.status !== 'in_progress';
     return ok({
       id: a.id,
+      public_id: a.public_id, // not in legacy
       status: a.status,
       score: a.score,
       total_marks: a.total_marks,

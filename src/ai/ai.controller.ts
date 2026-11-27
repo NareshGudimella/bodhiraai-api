@@ -60,6 +60,7 @@ export class AiController {
     return ok(
       rows.map((s) => ({
         id: s.id,
+        public_id: s.public_id, // not in legacy
         title: s.title,
         mode: s.mode,
         messages_count: s.messages_count,
@@ -91,6 +92,7 @@ export class AiController {
       {
         session: {
           id: session.id,
+          public_id: session.public_id, // not in legacy
           title,
           last_message_at: iso8601(lastMessageAt),
         },
@@ -112,6 +114,7 @@ export class AiController {
     return ok({
       session: {
         id: session.id,
+        public_id: session.public_id, // not in legacy
         title: session.title,
         last_message_at: iso8601(session.last_message_at),
       },

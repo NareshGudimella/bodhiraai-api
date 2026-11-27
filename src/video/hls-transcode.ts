@@ -89,7 +89,7 @@ export async function probeSize(file: string) {
     '-select_streams',
     'v:0',
     '-show_entries',
-    'stream=width,height:stream_side_data=rotation',
+    'stream=width,height:stream_side_data=rotation:format=duration',
     '-of',
     'json',
     file,
@@ -97,22 +97,24 @@ export async function probeSize(file: string) {
     // ffprobe ran and rejected the file (a missing binary stays a retryable error)
     throw /exited with/.test(e.message) ? new UnreadableVideo(e.message) : e;
   });
-  const s = (
-    JSON.parse(out) as {
-      streams?: {
-        width?: number;
-        height?: number;
-        side_data_list?: { rotation?: number }[];
-      }[];
-    }
-  ).streams?.[0];
+  const parsed = JSON.parse(out) as {
+    streams?: {
+      width?: number;
+      height?: number;
+      side_data_list?: { rotation?: number }[];
+    }[];
+    format?: { duration?: string };
+  };
+  const s = parsed.streams?.[0];
+  // not in legacy: the real length, so lesson progress uses it (not a typed-in value).
+  const duration = Math.round(Number(parsed.format?.duration) || 0);
   if (!s?.width || !s.height)
     throw new UnreadableVideo('The file has no video stream');
   // A phone clip rotated by 90 degrees is displayed (and scaled by ffmpeg) with sides swapped.
   const turned = Math.abs(s.side_data_list?.[0]?.rotation ?? 0) % 180 === 90;
   return turned
-    ? { width: s.height, height: s.width }
-    : { width: s.width, height: s.height };
+    ? { width: s.height, height: s.width, duration }
+    : { width: s.width, height: s.height, duration };
 }
 
 export interface HlsFile {
@@ -150,10 +152,10 @@ export async function assertDiskSpace(
 export async function transcodeToHls(
   src: string,
   upload: (file: HlsFile) => Promise<void>,
-): Promise<{ key: Buffer }> {
+): Promise<{ key: Buffer; durationSec: number }> {
   const dir = await mkdtemp(join(tmpdir(), 'bodhira-hls-'));
   try {
-    const { width, height } = await probeSize(src);
+    const { width, height, duration } = await probeSize(src);
     const renditions = chooseRenditions(width, height);
 
     const key = randomBytes(16);
@@ -232,7 +234,7 @@ export async function transcodeToHls(
           : 'application/vnd.apple.mpegurl',
       });
     }
-    return { key };
+    return { key, durationSec: duration };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

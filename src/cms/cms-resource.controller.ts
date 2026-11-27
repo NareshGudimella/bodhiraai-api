@@ -11,6 +11,7 @@ import {
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
+import { RateLimit } from '../common/decorators/rate-limit';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { and, asc, desc, eq, isNull, type SQL } from 'drizzle-orm';
 import { CurrentUser, Roles } from '../common/decorators/auth.decorators';
@@ -88,6 +89,11 @@ function resourceController(slug: string, def: ResourceDef): Type<unknown> {
       await this.db.update(this.table).set(data).where(this.byId(id));
     }
 
+    /** Not in legacy: the slug (services, categories) or public_id the URLs use. */
+    ref(row: Row) {
+      return row.slug ? { slug: row.slug } : { public_id: row.public_id };
+    }
+
     serialize(row: Row) {
       return toModel(def.table, row);
     }
@@ -116,6 +122,7 @@ function resourceController(slug: string, def: ResourceDef): Type<unknown> {
     }
 
     @Post()
+    @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
     @UseInterceptors(AnyFilesInterceptor(uploadOptions(11, 4)))
     async store(
       @CurrentUser() user: users,
@@ -133,10 +140,11 @@ function resourceController(slug: string, def: ResourceDef): Type<unknown> {
         type: CMS_MODEL(def.model),
         id: row.id,
       });
-      return ok({ id: row.id }, `${def.labels[0]} created.`);
+      return ok({ id: row.id, ...this.ref(row) }, `${def.labels[0]} created.`);
     }
 
     @Patch(':id')
+    @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
     @UseInterceptors(AnyFilesInterceptor(uploadOptions(11, 4)))
     async update(
       @CurrentUser() user: users,
@@ -154,7 +162,7 @@ function resourceController(slug: string, def: ResourceDef): Type<unknown> {
         type: CMS_MODEL(def.model),
         id: row.id,
       });
-      return ok({ id: row.id }, `${def.labels[0]} updated.`);
+      return ok({ id: row.id, ...this.ref(row) }, `${def.labels[0]} updated.`);
     }
 
     @Delete(':id')

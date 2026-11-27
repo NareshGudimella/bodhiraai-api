@@ -11,8 +11,22 @@ export interface UploadGrant {
   filename: string;
   size: number;
   type: string;
+  /** security: not in legacy: the lesson's state when the link was issued (`lessonVersion`). */
+  ver: string;
   exp: number;
 }
+
+/**
+ * security: not in legacy. Changes whenever the lesson is edited or its video replaced
+ * (a successful PUT sets a new random `video_upload_key`), which ends every link issued
+ * for the old state: a link works once and only on the lesson as it was.
+ */
+export const lessonVersion = (l: {
+  updated_at: Date | null;
+  video_upload_key: string | null;
+  video_hls_path: string | null;
+}) =>
+  `${l.updated_at?.getTime() ?? ''}|${l.video_upload_key ?? ''}|${l.video_hls_path ?? ''}`;
 
 const mac = (payload: string) =>
   createHmac('sha256', derivedKey('upload') ?? DEV_FILE_URL_SECRET)

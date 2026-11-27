@@ -11,6 +11,7 @@ import {
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
+import { RateLimit } from '../common/decorators/rate-limit';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { and, asc, eq, isNull, max } from 'drizzle-orm';
 import sharp from 'sharp';
@@ -162,6 +163,7 @@ export class CmsSiteController {
   }
 
   @Post('settings/:group')
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(AnyFilesInterceptor(uploadOptions(11, 4)))
   async settingsUpdate(
     @CurrentUser() user: users,
@@ -398,6 +400,7 @@ export class CmsSiteController {
   }
 
   @Post('media')
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(AnyFilesInterceptor(uploadOptions(11, 20)))
   async mediaStore(
     @CurrentUser() user: users,

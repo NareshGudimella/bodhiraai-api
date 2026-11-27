@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { insertWithSlug, SLUG_WORD } from '../common/slug';
 import { eq, inArray, max } from 'drizzle-orm';
 import { dirtyFields, phpBool } from '../common/http/eloquent';
 import { forbidden, phpJsonEncode } from '../common/http/laravel';
@@ -126,19 +127,29 @@ export class ContentService {
       .where(eq(chaptersTable.subject_id, subject.id));
     const now = new Date();
     const title = data.title as string;
-    const [row] = await this.db
-      .insert(chaptersTable)
-      .values({
-        subject_id: subject.id,
-        title,
-        slug: `${strSlug(title)}-${strRandom(4)}`,
-        description: (data.description as string | null | undefined) ?? null,
-        sort_order: int(data.sort_order ?? (top ?? 0) + 1),
-        is_published: phpBool(data.is_published ?? true),
-        created_at: now,
-        updated_at: now,
-      })
-      .returning();
+    const [row] = await insertWithSlug(
+      this.db,
+      chaptersTable,
+      chaptersTable.url_slug,
+      title,
+      SLUG_WORD.chapter,
+      (url_slug) =>
+        this.db
+          .insert(chaptersTable)
+          .values({
+            url_slug,
+            subject_id: subject.id,
+            title,
+            slug: `${strSlug(title)}-${strRandom(4)}`,
+            description:
+              (data.description as string | null | undefined) ?? null,
+            sort_order: int(data.sort_order ?? (top ?? 0) + 1),
+            is_published: phpBool(data.is_published ?? true),
+            created_at: now,
+            updated_at: now,
+          })
+          .returning(),
+    );
     return row;
   }
 
@@ -154,28 +165,37 @@ export class ContentService {
     const now = new Date();
     const title = data.title as string;
     const str = (k: string) => (data[k] as string | null | undefined) ?? null;
-    const [row] = await this.db
-      .insert(lessonsTable)
-      .values({
-        chapter_id: chapter.id,
-        title,
-        slug: `${strSlug(title)}-${strRandom(4)}`,
-        type: (data.type as string | undefined) ?? 'video',
-        thumbnail: str('thumbnail'),
-        content_url: str('content_url'),
-        video_status: str('video_status'), // not in legacy (video-transcode job)
-        video_upload_key: str('video_upload_key'),
-        video_hls_path: str('video_hls_path'),
-        video_hls_key: str('video_hls_key'),
-        content_body: str('content_body'),
-        duration_sec: int(data.duration_sec),
-        sort_order: int(data.sort_order ?? (top ?? 0) + 1),
-        is_free: phpBool(data.is_free ?? false),
-        is_published: phpBool(data.is_published ?? true),
-        created_at: now,
-        updated_at: now,
-      })
-      .returning();
+    const [row] = await insertWithSlug(
+      this.db,
+      lessonsTable,
+      lessonsTable.url_slug,
+      title,
+      SLUG_WORD.lesson,
+      (url_slug) =>
+        this.db
+          .insert(lessonsTable)
+          .values({
+            url_slug,
+            chapter_id: chapter.id,
+            title,
+            slug: `${strSlug(title)}-${strRandom(4)}`,
+            type: (data.type as string | undefined) ?? 'video',
+            thumbnail: str('thumbnail'),
+            content_url: str('content_url'),
+            video_status: str('video_status'), // not in legacy (video-transcode job)
+            video_upload_key: str('video_upload_key'),
+            video_hls_path: str('video_hls_path'),
+            video_hls_key: str('video_hls_key'),
+            content_body: str('content_body'),
+            duration_sec: int(data.duration_sec),
+            sort_order: int(data.sort_order ?? (top ?? 0) + 1),
+            is_free: phpBool(data.is_free ?? false),
+            is_published: phpBool(data.is_published ?? true),
+            created_at: now,
+            updated_at: now,
+          })
+          .returning(),
+    );
     return row;
   }
 
@@ -219,24 +239,34 @@ export class ContentService {
 
   async createQuiz(author: users, data: Data) {
     const now = new Date();
-    const [row] = await this.db
-      .insert(quizzesTable)
-      .values({
-        school_id: author.school_id,
-        subject_id: id(data.subject_id),
-        chapter_id: id(data.chapter_id),
-        created_by: author.id,
-        title: data.title as string,
-        description: (data.description as string | null | undefined) ?? null,
-        duration_min: int(data.duration_min ?? 15),
-        total_marks: 0,
-        pass_marks: int(data.pass_marks ?? 0),
-        shuffle_questions: phpBool(data.shuffle_questions ?? true),
-        is_published: phpBool(data.is_published ?? false),
-        created_at: now,
-        updated_at: now,
-      })
-      .returning();
+    const [row] = await insertWithSlug(
+      this.db,
+      quizzesTable,
+      quizzesTable.slug,
+      data.title as string,
+      SLUG_WORD.quiz,
+      (slug) =>
+        this.db
+          .insert(quizzesTable)
+          .values({
+            slug,
+            school_id: author.school_id,
+            subject_id: id(data.subject_id),
+            chapter_id: id(data.chapter_id),
+            created_by: author.id,
+            title: data.title as string,
+            description:
+              (data.description as string | null | undefined) ?? null,
+            duration_min: int(data.duration_min ?? 15),
+            total_marks: 0,
+            pass_marks: int(data.pass_marks ?? 0),
+            shuffle_questions: phpBool(data.shuffle_questions ?? true),
+            is_published: phpBool(data.is_published ?? false),
+            created_at: now,
+            updated_at: now,
+          })
+          .returning(),
+    );
     return row;
   }
 

@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { insertWithSlug, SLUG_WORD } from '../common/slug';
 import { randomInt } from 'node:crypto';
 import {
   and,
@@ -341,27 +342,37 @@ export class LiveClassService {
       url = `${JITSI_HOST}/${room}`;
     }
     const now = new Date();
-    const [lc] = await this.db
-      .insert(liveClassesTable)
-      .values({
-        host_id: teacher.id,
-        school_id: teacher.school_id,
-        class_id: data.class_id === null ? null : BigInt(data.class_id),
-        syllabus_id:
-          data.syllabus_id === null ? null : BigInt(data.syllabus_id),
-        subject_id: data.subject_id === null ? null : BigInt(data.subject_id),
-        title: data.title,
-        description: data.description,
-        scheduled_at: data.scheduled_at,
-        duration_min: data.duration_min,
-        provider: data.provider,
-        meeting_url: url,
-        meeting_room: room,
-        status: 'scheduled',
-        created_at: now,
-        updated_at: now,
-      })
-      .returning();
+    const [lc] = await insertWithSlug(
+      this.db,
+      liveClassesTable,
+      liveClassesTable.slug,
+      data.title,
+      SLUG_WORD.live,
+      (slug) =>
+        this.db
+          .insert(liveClassesTable)
+          .values({
+            slug,
+            host_id: teacher.id,
+            school_id: teacher.school_id,
+            class_id: data.class_id === null ? null : BigInt(data.class_id),
+            syllabus_id:
+              data.syllabus_id === null ? null : BigInt(data.syllabus_id),
+            subject_id:
+              data.subject_id === null ? null : BigInt(data.subject_id),
+            title: data.title,
+            description: data.description,
+            scheduled_at: data.scheduled_at,
+            duration_min: data.duration_min,
+            provider: data.provider,
+            meeting_url: url,
+            meeting_room: room,
+            status: 'scheduled',
+            created_at: now,
+            updated_at: now,
+          })
+          .returning(),
+    );
     await this.notifyAudience(lc, teacher);
     return lc;
   }

@@ -9,7 +9,7 @@ import { decryptSecret } from '../mail/mail-crypto';
 import { StorageService } from '../storage/storage.service';
 import { apiOrigin, signUpload, verifyUpload } from './direct-upload';
 import { assertDiskSpace, transcodeToHls } from './hls-transcode';
-import { VideoJobs } from './video-jobs.service';
+import { hlsDuration, VideoJobs } from './video-jobs.service';
 
 const KEY = 'video-imports/lessons/1/clip-abcdefgh.mp4';
 
@@ -99,6 +99,8 @@ describe('VideoJobs (video-transcode job, real ffmpeg)', () => {
     const prefix = set.video_hls_path as string;
     expect(prefix).toMatch(/^hls\/1\/[0-9a-f]{16}\/$/);
     expect(set).toMatchObject({ video_status: null, video_upload_key: null });
+    // The clip's real length (3 s) replaces the typed-in duration.
+    expect(set.duration_sec).toBe(3);
     const key = Buffer.from(
       decryptSecret(set.video_hls_key as string),
       'base64',
@@ -277,6 +279,7 @@ describe('upload token (not in legacy)', () => {
     filename: 'a.mp4',
     size: 100,
     type: 'video/mp4',
+    ver: '1|k|',
   };
   it('carries the signed grant and expires after 2 h', () => {
     const { token } = signUpload(g, 1_000_000);
@@ -295,5 +298,14 @@ describe('upload token (not in legacy)', () => {
       apiOrigin({ NODE_ENV: 'production', WEB_URL: 'https://bodhiraai.com/' }),
     ).toBe('https://api.bodhiraai.com');
     expect(apiOrigin({ PORT: '4000' })).toBe('http://localhost:4000');
+  });
+});
+
+describe('hlsDuration (not in legacy)', () => {
+  it('sums the segment durations of a VOD playlist', () => {
+    const pl =
+      '#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6.000000,\na.ts\n#EXTINF:6.000000,\nb.ts\n#EXTINF:2.480000,\nc.ts\n#EXT-X-ENDLIST\n';
+    expect(hlsDuration(pl)).toBe(14);
+    expect(hlsDuration('#EXTM3U\n')).toBe(0);
   });
 });

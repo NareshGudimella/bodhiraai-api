@@ -10,6 +10,8 @@ import {
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
+import { sanitizeCms } from './sanitize';
+import { RateLimit } from '../common/decorators/rate-limit';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { and, asc, eq, isNull, max } from 'drizzle-orm';
 import { CurrentUser, Roles } from '../common/decorators/auth.decorators';
@@ -231,6 +233,7 @@ export class CmsPagesController {
   // ---- Sections ------------------------------------------------------
 
   @Post('pages/:page/sections')
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(AnyFilesInterceptor(uploadOptions(11, 1)))
   async sectionStore(
     @CurrentUser() user: users,
@@ -266,6 +269,7 @@ export class CmsPagesController {
   }
 
   @Patch('sections/:section')
+  @RateLimit(10, 'user') // security: not in legacy: counted before the upload is buffered
   @UseInterceptors(AnyFilesInterceptor(uploadOptions(11, 1)))
   async sectionUpdate(
     @CurrentUser() user: users,
@@ -434,7 +438,7 @@ export class CmsPagesController {
       eyebrow: pick('eyebrow'),
       heading: pick('heading'),
       subheading: pick('subheading'),
-      body: pick('body'),
+      body: pick('body') === null ? null : sanitizeCms(pick('body')!), // security: not in legacy: sanitised on save
       media_url: mediaUrl,
       data: jsonField(data.data),
       // `(bool) ($data['is_active'] ?? $section->is_active ?? true)`.

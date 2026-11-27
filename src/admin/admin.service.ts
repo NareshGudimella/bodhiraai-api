@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { insertWithSlug, SLUG_WORD } from '../common/slug';
 import { assertSeatFree, seatsUsed } from '../common/seats';
 import { directSchoolId, individualSchool } from '../common/direct-school';
 import {
@@ -18,6 +19,7 @@ import { ApiException, ValidationFailed } from '../common/http/api.exception';
 import {
   dateString,
   diffForHumans,
+  forbidden,
   parseLaravelDate,
 } from '../common/http/laravel';
 import { Role, roleLabel } from '../common/roles';
@@ -221,6 +223,7 @@ export class AdminService {
       },
       recent_signups: signups.map((u) => ({
         id: u.id,
+        public_id: u.public_id, // not in legacy
         name: u.name,
         role: u.role,
         role_label: roleLabel(u.role),
@@ -354,6 +357,7 @@ export class AdminService {
   /** Only the validated keys among name/email/phone/role/gender/grade/dob, plus a new password. */
   async updateUser(admin: users, user: users, data: Record<string, unknown>) {
     await guardSameSchoolUser(this.db, admin, user);
+    this.guardManageable(admin, user);
     const fields: Record<string, unknown> = {};
     // Not in legacy: an admin / super admin account keeps its role (the edit
     // form locks the role select; legacy's `in:` rule also refused 'admin').
@@ -370,18 +374,33 @@ export class AdminService {
       if (k in data) fields[k] = data[k];
     }
     if ('dob' in data) fields.dob = dateValue(data.dob);
-    if (typeof data.password === 'string' && data.password)
-      fields.password = await hashPassword(data.password);
+    const newPassword = typeof data.password === 'string' && data.password;
+    if (newPassword) fields.password = await hashPassword(newPassword);
     const [row] = await this.db
       .update(usersTable)
       .set({ ...fields, updated_at: new Date() })
       .where(eq(usersTable.id, user.id))
       .returning();
+    // security: not in legacy: a password set by an admin ends the account's sessions
+    // (unless the admin changed their own, which keeps the caller's other tokens as is).
+    if (newPassword && user.id !== admin.id)
+      await this.tokens.revokeAllForUser(user.id);
     return row;
+  }
+
+  /**
+   * security: not in legacy: an admin manages students, teachers and parents only (and
+   * themselves); peer admins and super admins are off limits (school admins are managed
+   * by the super admin at /super/schools/:school/admins).
+   */
+  private guardManageable(admin: users, user: users) {
+    if (user.id !== admin.id && !EDITABLE_ROLES.includes(user.role as Role))
+      throw forbidden();
   }
 
   async toggleUser(admin: users, user: users) {
     await guardSameSchoolUser(this.db, admin, user);
+    this.guardManageable(admin, user);
     // security: not in legacy — approving an on-hold account takes a seat.
     if (user.status === 'on_hold') {
       await assertSeatFree(this.db, user.school_id, user.role, 'status');
@@ -395,7 +414,11 @@ export class AdminService {
       .where(eq(usersTable.id, user.id))
       .returning();
     // security: not in legacy — a deactivated user is signed out everywhere.
-    if (row.status !== 'active') await this.tokens.revokeAllForUser(user.id);
+    if (row.status !== 'active') {
+      await this.tokens.revokeAllForUser(user.id);
+      // security: not in legacy: and their open video sessions.
+      await this.tokens.revokeVideoSessions(user.id);
+    }
     return row;
   }
 
@@ -455,22 +478,31 @@ export class AdminService {
       );
     }
     const now = new Date();
-    const [row] = await this.db
-      .insert(classesTable)
-      .values({
-        school_id: admin.school_id!,
-        grade: data.grade as string,
-        section: data.section as string,
-        class_teacher_id:
-          data.class_teacher_id == null
-            ? null
-            : BigInt(data.class_teacher_id as string | number),
-        academic_year:
-          (data.academic_year as string | null | undefined) ?? null,
-        created_at: now,
-        updated_at: now,
-      })
-      .returning();
+    const [row] = await insertWithSlug(
+      this.db,
+      classesTable,
+      classesTable.slug,
+      `class ${data.grade as string} ${data.section as string}`,
+      SLUG_WORD.class,
+      (slug) =>
+        this.db
+          .insert(classesTable)
+          .values({
+            slug,
+            school_id: admin.school_id!,
+            grade: data.grade as string,
+            section: data.section as string,
+            class_teacher_id:
+              data.class_teacher_id == null
+                ? null
+                : BigInt(data.class_teacher_id as string | number),
+            academic_year:
+              (data.academic_year as string | null | undefined) ?? null,
+            created_at: now,
+            updated_at: now,
+          })
+          .returning(),
+    );
     return row;
   }
 
@@ -483,7 +515,13 @@ export class AdminService {
           orderBy: (t) => [asc(t.student_id), asc(t.id)],
           with: {
             users: {
-              columns: { id: true, name: true, grade: true, avatar: true },
+              columns: {
+                id: true,
+                public_id: true,
+                name: true,
+                grade: true,
+                avatar: true,
+              },
             },
           },
         },
@@ -491,7 +529,13 @@ export class AdminService {
           orderBy: (t) => [asc(t.subject_id), asc(t.id)],
           with: {
             subjects: {
-              columns: { id: true, name: true, icon: true, grade: true },
+              columns: {
+                id: true,
+                url_slug: true,
+                name: true,
+                icon: true,
+                grade: true,
+              },
             },
           },
         },
@@ -502,6 +546,7 @@ export class AdminService {
     return {
       class: {
         id: c.id,
+        slug: c.slug, // not in legacy
         label: classLabel(c),
         grade: c.grade,
         section: c.section,
@@ -510,6 +555,7 @@ export class AdminService {
       },
       students: c.class_student.map((r) => ({
         id: r.users.id,
+        public_id: r.users.public_id, // not in legacy
         name: r.users.name,
         roll_no: r.roll_no,
         // not in legacy API: the Blade class page shows grade and avatar
@@ -518,6 +564,7 @@ export class AdminService {
       })),
       subjects: c.class_subject.map((r) => ({
         id: r.subjects.id,
+        url_slug: r.subjects.url_slug, // not in legacy
         name: r.subjects.name,
         teacher_id: r.teacher_id,
         // not in legacy API: icon and grade, as the Blade class page shows
@@ -724,6 +771,7 @@ export class AdminService {
       const a = attByClass.get(c.id);
       return {
         id: c.id,
+        slug: c.slug, // not in legacy
         label: classLabel(c),
         students: c.class_student.length,
         attendance_percent: pct(a?.present ?? 0, a?.total ?? 0),

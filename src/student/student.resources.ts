@@ -16,6 +16,7 @@ export function subjectResource(s: subjects, chaptersCount?: number) {
     id: s.id,
     name: s.name,
     slug: s.slug,
+    url_slug: s.url_slug, // not in legacy: the unique slug for URLs
     grade: s.grade,
     icon: s.icon,
     color: s.color,
@@ -30,6 +31,7 @@ export function chapterResource(c: chapters, lessonsCount?: number) {
     subject_id: c.subject_id,
     title: c.title,
     slug: c.slug,
+    url_slug: c.url_slug, // not in legacy
     description: c.description,
     sort_order: c.sort_order,
     ...(lessonsCount !== undefined && { lessons_count: lessonsCount }),
@@ -61,6 +63,7 @@ export function lessonResource(
     chapter_id: l.chapter_id,
     title: l.title,
     slug: l.slug,
+    url_slug: l.url_slug, // not in legacy
     type: l.type,
     // security: not in legacy: private files come out as signed links, and
     // `playback` says how to play the lesson (/lessons/:id/playback).
@@ -76,11 +79,13 @@ export function lessonResource(
       chapter: {
         id: l.chapters.id,
         title: l.chapters.title,
+        url_slug: l.chapters.url_slug, // not in legacy
         subject: l.chapters.subjects
           ? {
               id: l.chapters.subjects.id,
               name: l.chapters.subjects.name,
               icon: l.chapters.subjects.icon,
+              url_slug: l.chapters.subjects.url_slug, // not in legacy
             }
           : null,
       },
@@ -98,6 +103,7 @@ type QuizWith = quizzes & {
 export function quizResource(q: QuizWith) {
   return {
     id: q.id,
+    slug: q.slug, // not in legacy
     title: q.title,
     description: q.description,
     duration_min: q.duration_min,
@@ -108,12 +114,21 @@ export function quizResource(q: QuizWith) {
     ends_at: iso8601(q.ends_at),
     ...(q.subjects !== undefined && {
       subject: q.subjects
-        ? { id: q.subjects.id, name: q.subjects.name, icon: q.subjects.icon }
+        ? {
+            id: q.subjects.id,
+            name: q.subjects.name,
+            icon: q.subjects.icon,
+            url_slug: q.subjects.url_slug, // not in legacy
+          }
         : null,
     }),
     ...(q.chapters !== undefined && {
       chapter: q.chapters
-        ? { id: q.chapters.id, title: q.chapters.title }
+        ? {
+            id: q.chapters.id,
+            title: q.chapters.title,
+            url_slug: q.chapters.url_slug, // not in legacy
+          }
         : null,
     }),
     ...(q.questions && {

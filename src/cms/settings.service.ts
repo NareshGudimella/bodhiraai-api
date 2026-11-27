@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { HTML_SETTINGS } from './sanitize';
 import { and, asc, eq } from 'drizzle-orm';
 import { dirtyFields } from '../common/http/eloquent';
 import { phpJsonDecode, phpJsonEncode, sameJson } from '../common/http/laravel';
@@ -36,7 +37,11 @@ export class SettingsService {
       const at = compound.indexOf('.');
       const group = compound.slice(0, at);
       const key = compound.slice(at + 1);
-      const encoded = phpJsonEncode(wrap(value));
+      // security: not in legacy: settings the web renders as HTML are sanitised on save.
+      const clean = HTML_SETTINGS[compound];
+      const encoded = phpJsonEncode(
+        wrap(clean && typeof value === 'string' ? clean(value) : value),
+      );
       const now = new Date();
       const row = await this.db.query.site_settings.findFirst({
         where: and(eq(site_settings.group, group), eq(site_settings.key, key)),

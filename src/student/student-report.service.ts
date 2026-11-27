@@ -146,7 +146,9 @@ export class StudentReportService {
     const attempts = await this.db
       .select({
         id: quiz_attempts.id,
+        public_id: quiz_attempts.public_id,
         quiz_id: quiz_attempts.quiz_id,
+        quiz_slug: quizzes.slug,
         title: quizzes.title,
         subject: subjects.name,
         score: quiz_attempts.score,
@@ -212,7 +214,9 @@ export class StudentReportService {
     return {
       attempts: attempts.map((a) => ({
         id: a.id,
+        public_id: a.public_id, // not in legacy
         quiz_id: a.quiz_id,
+        quiz_slug: a.quiz_slug, // not in legacy
         title: a.title,
         subject: a.subject,
         score: a.score,
