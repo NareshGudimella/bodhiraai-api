@@ -1,3 +1,7 @@
+// shortcut: sanitize-html is pinned to 2.17.0 because 2.18+ pulls the ESM-only htmlparser2 12,
+// which Jest (and a worker on Node < 22.12) cannot load. Its moderate advisory (javascript: in
+// action/formaction) does not apply: forms, buttons and those attributes are not allowed below.
+// Upgrade when the worker and CI run Node >= 22.12 and Jest loads ESM dependencies.
 import sanitizeHtml from 'sanitize-html';
 
 /**
