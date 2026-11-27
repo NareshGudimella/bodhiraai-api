@@ -4,6 +4,31 @@
  * simple content collections (CmsResourceController subclasses).
  */
 
+/**
+ * security: not in legacy: the limits a settings value gets on save (legacy
+ * validated nothing). Per type, with overrides by `group.key`.
+ */
+export const SETTING_RULES = {
+  text: ['nullable', 'string', 'max:255'],
+  textarea: ['nullable', 'string', 'max:2000'],
+  code: ['nullable', 'string', 'max:5000'],
+  color: ['nullable', 'string', 'max:30'],
+  image: ['nullable', 'string', 'max:500'],
+  number: ['nullable', 'integer', 'min:0', 'max:1000'],
+  boolean: ['nullable', 'in:1,0,true,false,on,off,yes,no'],
+} as const;
+export const SETTING_OVERRIDES: Record<string, string[]> = {
+  'contact.email': ['nullable', 'email', 'max:190'],
+  'grievance.email': ['nullable', 'email', 'max:190'],
+  'billing.email': ['nullable', 'email', 'max:190'],
+  'contact.phone': ['nullable', 'string', 'max:40'],
+  'contact.whatsapp': ['nullable', 'string', 'max:40'],
+  'grievance.phone': ['nullable', 'string', 'max:40'],
+  'home.video_url': ['nullable', 'string', 'max:500'],
+  'theme.radius': ['nullable', 'integer', 'min:0', 'max:64'],
+  'theme.mode': ['nullable', 'string', 'max:20'],
+};
+
 export type SettingField = {
   key: string;
   label: string;
@@ -224,7 +249,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         name: 'body',
         label: 'Full content',
         type: 'richtext',
-        rules: ['nullable', 'string'],
+        rules: ['nullable', 'string', 'max:100000'],
       },
       {
         name: 'image_url',
@@ -292,7 +317,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         name: 'answer',
         label: 'Answer',
         type: 'textarea',
-        rules: ['required', 'string'],
+        rules: ['required', 'string', 'max:5000'],
       },
       {
         name: 'category',
@@ -343,7 +368,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         name: 'quote',
         label: 'Quote',
         type: 'textarea',
-        rules: ['required', 'string'],
+        rules: ['required', 'string', 'max:2000'],
       },
       {
         name: 'rating',
@@ -388,7 +413,7 @@ export const RESOURCES: Record<string, ResourceDef> = {
         name: 'bio',
         label: 'Bio',
         type: 'textarea',
-        rules: ['nullable', 'string'],
+        rules: ['nullable', 'string', 'max:2000'],
       },
       SORT,
       VISIBLE,

@@ -1,3 +1,4 @@
+import { PHONE_FORMAT, NEW_PASSWORD_RULES } from '../common/http/rules';
 import {
   Body,
   Controller,
@@ -29,8 +30,18 @@ const adminRules = (ignore?: bigint) => {
     name: ['required', 'string', 'max:120'],
     // A School Admin signs in with the email, so it is required.
     email: ['required', 'email', 'max:160', `unique:users,email${u}`],
-    phone: ['nullable', 'string', 'max:20', `unique:users,phone${u}`],
-    password: [ignore ? 'nullable' : 'required', 'string', 'min:8'],
+    phone: [
+      'nullable',
+      'string',
+      'max:20',
+      PHONE_FORMAT,
+      `unique:users,phone${u}`,
+    ],
+    password: [
+      ignore ? 'nullable' : 'required',
+      'string',
+      ...NEW_PASSWORD_RULES,
+    ],
   };
 };
 

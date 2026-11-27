@@ -28,6 +28,10 @@ export function configureApp(app: NestExpressApplication) {
     ],
   });
   app.use('/webhooks', raw({ type: () => true, limit: '1mb' }));
+  // security: not in legacy: JSON and form bodies up to 1 MB (express' default of 100 KB would cut
+  // a 100,000-character lesson or post body); uploads are capped per route (uploadOptions).
+  app.useBodyParser('json', { limit: '1mb' });
+  app.useBodyParser('urlencoded', { limit: '1mb', extended: true });
   // Uploaded files (local driver) are embedded by the web app on another origin.
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   // Local disk is development only: production stores in R2 (StorageService).

@@ -112,3 +112,18 @@ describe('laravelValidate', () => {
     });
   });
 });
+
+describe('laravelValidate date bounds', () => {
+  it('checks before:<date> and after:<date>', async () => {
+    const rules = {
+      d: ['required', 'date', 'after:2000-01-01', 'before:2100-01-01'],
+    };
+    expect(await errorsOf({ d: '2024-05-01' }, rules)).toBeNull();
+    expect(await errorsOf({ d: '1999-12-31' }, rules)).toEqual({
+      d: ['The d field must be a date after 2000-01-01.'],
+    });
+    expect(await errorsOf({ d: '2100-01-02' }, rules)).toEqual({
+      d: ['The d field must be a date before 2100-01-01.'],
+    });
+  });
+});

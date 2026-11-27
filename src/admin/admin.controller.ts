@@ -1,3 +1,4 @@
+import { PHONE_FORMAT, NEW_PASSWORD_RULES } from '../common/http/rules';
 import {
   Body,
   Controller,
@@ -48,7 +49,13 @@ const userRules = (ignore?: bigint, lockedRole?: string) => {
   return {
     name: ['required', 'string', 'max:120'],
     email: ['nullable', 'email', 'max:160', `unique:users,email${u}`],
-    phone: ['nullable', 'string', 'max:20', `unique:users,phone${u}`],
+    phone: [
+      'nullable',
+      'string',
+      'max:20',
+      PHONE_FORMAT,
+      `unique:users,phone${u}`,
+    ],
     username: [
       'nullable',
       'string',
@@ -60,8 +67,12 @@ const userRules = (ignore?: bigint, lockedRole?: string) => {
     role: ['required', `in:${lockedRole ?? 'student,teacher,parent'}`],
     gender: ['nullable', 'string', 'max:10'],
     grade: ['nullable', 'string', 'max:10'],
-    dob: ['nullable', 'date'],
-    password: [ignore ? 'nullable' : 'required', 'string', 'min:6'],
+    dob: ['nullable', 'date', 'before:today', 'after:1900-01-01'],
+    password: [
+      ignore ? 'nullable' : 'required',
+      'string',
+      ...NEW_PASSWORD_RULES,
+    ],
   };
 };
 

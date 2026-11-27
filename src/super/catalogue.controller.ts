@@ -1,3 +1,4 @@
+import { DESCRIPTION_MAX } from '../common/http/rules';
 import {
   Body,
   Controller,
@@ -92,7 +93,7 @@ export class CatalogueController {
         `unique:syllabi,grade,${ignore ?? 'NULL'},id,${where}`,
       ],
       name: ['required', 'string', 'max:120'],
-      description: ['nullable', 'string'],
+      description: ['nullable', 'string', `max:${DESCRIPTION_MAX}`],
       sort_order: ['nullable', 'integer', 'min:0', 'max:9999'],
       is_active: ['nullable', 'boolean'],
     });
@@ -205,7 +206,7 @@ export class CatalogueController {
       name: ['required', 'string', 'max:120'],
       icon: ['nullable', 'string', 'max:8'],
       color: ['nullable', 'string', 'max:20'],
-      description: ['nullable', 'string'],
+      description: ['nullable', 'string', `max:${DESCRIPTION_MAX}`],
     });
     const name = data.name as string;
     const now = new Date();
@@ -279,7 +280,7 @@ export class CatalogueController {
     const subject = await this.syllabusSubject(s, subjectRaw, 404);
     const data = await laravelValidate(this.db, body, {
       title: ['required', 'string', 'max:160'],
-      description: ['nullable', 'string'],
+      description: ['nullable', 'string', `max:${DESCRIPTION_MAX}`],
     });
     const c = await this.content.createChapter(subject, data);
     return ok({ id: c.id, url_slug: c.url_slug }, 'Chapter added.');
@@ -308,8 +309,8 @@ export class CatalogueController {
       audience: ['required', 'in:individual,school'],
       name: ['required', 'string', 'max:100'],
       tagline: ['nullable', 'string', 'max:200'],
-      description: ['nullable', 'string'],
-      features: ['nullable', 'string'], // newline-separated in the form
+      description: ['nullable', 'string', `max:${DESCRIPTION_MAX}`],
+      features: ['nullable', 'string', 'max:5000'], // newline-separated in the form
       monthly_price: ['required', 'integer', 'min:0', 'max:9999999'],
       yearly_price: ['required', 'integer', 'min:0', 'max:99999999'],
       trial_days: ['nullable', 'integer', 'min:0', 'max:90'],

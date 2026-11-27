@@ -13,7 +13,13 @@ import {
 /** Multer options for upload routes. Hard cap only; Laravel-style size rules run in validateWithFile. */
 export const uploadOptions = (hardCapMb: number, files = 1) => ({
   storage: memoryStorage(),
-  limits: { fileSize: hardCapMb * 1024 * 1024, files },
+  // security: not in legacy: text parts are capped too (fieldSize fits lesson `thumbnail_data`, 5,000,000 characters).
+  limits: {
+    fileSize: hardCapMb * 1024 * 1024,
+    files,
+    fields: 100,
+    fieldSize: 5_100_000,
+  },
 });
 
 export interface FileRule {

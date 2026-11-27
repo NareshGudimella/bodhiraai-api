@@ -1,3 +1,8 @@
+import {
+  PHONE_FORMAT,
+  NEW_PASSWORD_RULES,
+  normalizePhone,
+} from '../common/http/rules';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { seatsUsed } from '../common/seats';
 import { randomInt } from 'node:crypto';
@@ -249,10 +254,16 @@ export class AuthService {
     const data = await laravelValidate(this.db, body, {
       name: ['required', 'string', 'max:120'],
       email: ['required', 'email', 'max:160', 'unique:users,email'],
-      phone: ['nullable', 'string', 'max:20', 'unique:users,phone'],
-      password: ['required', 'string', 'min:6', 'confirmed'],
+      phone: [
+        'nullable',
+        'string',
+        'max:20',
+        PHONE_FORMAT,
+        'unique:users,phone',
+      ],
+      password: ['required', 'string', ...NEW_PASSWORD_RULES, 'confirmed'],
       syllabus_id: ['required', 'exists:syllabi,id'],
-      plan_key: ['nullable', 'string', 'exists:plans,key'],
+      plan_key: ['nullable', 'string', 'max:50', 'exists:plans,key'],
       cycle: ['nullable', 'in:monthly,yearly'],
       accept: ['accepted'],
     });
@@ -316,8 +327,11 @@ export class AuthService {
 
   async login(dto: LoginDto) {
     const field = detectField(dto.identifier);
+    // not in legacy: phones are stored as 10 digits; accept +91 / spaces when typed.
+    const id =
+      field === 'phone' ? normalizePhone(dto.identifier) : dto.identifier;
     const user = await this.db.query.users.findFirst({
-      where: eq(usersTable[field], dto.identifier),
+      where: eq(usersTable[field], id),
       orderBy: [asc(usersTable.id)],
     });
 

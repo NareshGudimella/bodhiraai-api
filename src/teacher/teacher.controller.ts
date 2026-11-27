@@ -1,4 +1,10 @@
 import {
+  DATE_AFTER,
+  DATE_BEFORE,
+  IDS_MAX,
+  URL_MAX,
+} from '../common/http/rules';
+import {
   Body,
   Controller,
   Get,
@@ -104,8 +110,8 @@ export class TeacherController {
     const c = await this.teachers.findClass(routeId(raw, 'Klass'));
     await this.teachers.guardClass(user, c);
     const data = await laravelValidate(this.db, body, {
-      date: ['required', 'date'],
-      records: ['required', 'array'],
+      date: ['required', 'date', DATE_AFTER, DATE_BEFORE],
+      records: ['required', 'array', `max:${IDS_MAX}`],
       'records.*': ['required', 'in:present,absent,late,excused'],
     });
     const saved = await this.teachers.saveAttendance(
@@ -156,9 +162,9 @@ export class TeacherController {
         class_id: ['required', 'exists:classes,id'],
         subject_id: ['nullable', 'exists:subjects,id'],
         title: ['required', 'string', 'max:160'],
-        description: ['nullable', 'string'],
-        attachment_url: ['nullable', 'url'],
-        due_date: ['nullable', 'date'],
+        description: ['nullable', 'string', 'max:5000'],
+        attachment_url: ['nullable', 'url', `max:${URL_MAX}`],
+        due_date: ['nullable', 'date', DATE_AFTER, DATE_BEFORE],
         max_marks: ['required', 'integer', 'min:1', 'max:1000'],
       },
       attachment,
@@ -220,8 +226,8 @@ export class TeacherController {
       routeId(raw, 'AssignmentSubmission'),
     );
     const data = await laravelValidate(this.db, body, {
-      score: ['required', 'integer', 'min:0'],
-      feedback: ['nullable', 'string'],
+      score: ['required', 'integer', 'min:0', 'max:1000'],
+      feedback: ['nullable', 'string', 'max:2000'],
     });
     const graded = await this.teachers.gradeSubmission(
       sub,

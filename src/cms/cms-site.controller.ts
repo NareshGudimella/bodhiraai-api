@@ -1,3 +1,4 @@
+import { ID_MAX, IDS_MAX } from '../common/http/rules';
 import {
   Body,
   Controller,
@@ -57,7 +58,11 @@ import {
 } from '../storage/uploads';
 import { AuditService, CMS_MODEL } from './audit.service';
 import type { MulterFile } from './cms-resource.controller';
-import { SETTINGS_SCHEMA } from './cms.schema';
+import {
+  SETTING_OVERRIDES,
+  SETTING_RULES,
+  SETTINGS_SCHEMA,
+} from './cms.schema';
 import { SettingsService } from './settings.service';
 
 type Data = Record<string, unknown>;
@@ -175,6 +180,20 @@ export class CmsSiteController {
     const schema = SETTINGS_SCHEMA[group];
     if (!schema) throw new ApiException('HTTP error', 404);
     const input = (cleanInput(raw) ?? {}) as Data;
+    // security: not in legacy: every field is capped (cms.schema.ts SETTING_RULES).
+    await laravelValidate(
+      this.db,
+      input,
+      Object.fromEntries(
+        schema.fields.map((f) => [
+          f.key,
+          [
+            ...(SETTING_OVERRIDES[`${group}.${f.key}`] ??
+              SETTING_RULES[f.type]),
+          ],
+        ]),
+      ),
+    );
 
     const pairs: Data = {};
     for (const field of schema.fields) {
@@ -342,8 +361,8 @@ export class CmsSiteController {
   async reorder(@Param('menu') key: string, @Body() body: unknown) {
     const menu = await this.menu(key);
     const data = await laravelValidate(this.db, body, {
-      ids: ['required', 'array'],
-      'ids.*': ['integer'],
+      ids: ['required', 'array', `max:${IDS_MAX}`],
+      'ids.*': ['integer', 'min:1', `max:${ID_MAX}`],
     });
     const now = new Date();
     for (const [i, id] of (

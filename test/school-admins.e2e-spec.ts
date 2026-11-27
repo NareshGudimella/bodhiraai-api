@@ -16,6 +16,8 @@ import type { schools as School } from '../src/db/types';
 loadEnv();
 
 const tag = randomBytes(3).toString('hex');
+// Digits only, for phone numbers (the phone format allows no letters).
+const digits = String(parseInt(tag, 16)).padStart(8, '0').slice(-8);
 
 type Envelope<T = unknown> = {
   success: boolean;
@@ -150,8 +152,8 @@ describe('School Admin accounts (e2e)', () => {
       .send({
         name: '  New Admin  ',
         email: email('new'),
-        phone: `+91${tag}01`,
-        password: 'secret-123',
+        phone: `${digits}01`,
+        password: 'Secret-123',
       })
       .expect(201);
     const body = res.body as Envelope<AdminRow>;
@@ -168,7 +170,7 @@ describe('School Admin accounts (e2e)', () => {
     });
     expect(row).toMatchObject({ role: 'admin', school_id: schoolA.id });
 
-    const res2 = await login(email('new'), 'secret-123').expect(200);
+    const res2 = await login(email('new'), 'Secret-123').expect(200);
     const me = await http()
       .get('/api/v1/admin/home')
       .set({
@@ -198,6 +200,34 @@ describe('School Admin accounts (e2e)', () => {
     expect((other.body as Envelope<AdminRow[]>).data).toEqual([]);
   });
 
+  it.each([
+    ['no uppercase', 'secret-123'],
+    ['no lowercase', 'SECRET-123'],
+    ['no digit', 'Secret-abc'],
+    ['no symbol', 'Secret123'],
+  ])('rejects a new password with %s (422)', async (_n, password) => {
+    const res = await http()
+      .post(base(schoolA))
+      .set(as('super'))
+      .send({ name: 'W', email: email('weak'), password })
+      .expect(422);
+    expect((res.body as Envelope).errors!.password).toEqual([
+      'The password must contain an uppercase letter, a lowercase letter, a digit and a symbol.',
+    ]);
+  });
+
+  it.each(['123456789', '12345678901'])(
+    'rejects the %s phone (422)',
+    async (phone) => {
+      const res = await http()
+        .post(base(schoolA))
+        .set(as('super'))
+        .send({ name: 'P', email: email('ph'), password: 'Secret-123', phone })
+        .expect(422);
+      expect((res.body as Envelope).errors!.phone).toBeDefined();
+    },
+  );
+
   it('validates like the user forms', async () => {
     const res = await http()
       .post(base(schoolA))
@@ -208,7 +238,8 @@ describe('School Admin accounts (e2e)', () => {
     expect(errors.name).toEqual(['The name field is required.']);
     expect(errors.email).toEqual(['The email has already been taken.']);
     expect(errors.password).toEqual([
-      'The password field must be at least 8 characters.',
+      'The password field must be at least 6 characters.',
+      'The password must contain an uppercase letter, a lowercase letter, a digit and a symbol.',
     ]);
     const dupPhone = await http()
       .post(base(schoolB))
@@ -216,8 +247,8 @@ describe('School Admin accounts (e2e)', () => {
       .send({
         name: 'X',
         email: email('x'),
-        phone: `+91${tag}01`,
-        password: 'secret-123',
+        phone: `${digits}01`,
+        password: 'Secret-123',
       })
       .expect(422);
     expect((dupPhone.body as Envelope).errors!.phone).toEqual([
@@ -229,7 +260,7 @@ describe('School Admin accounts (e2e)', () => {
     const res = await http()
       .post(base(direct))
       .set(as('super'))
-      .send({ name: 'D', email: email('d'), password: 'secret-123' })
+      .send({ name: 'D', email: email('d'), password: 'Secret-123' })
       .expect(422);
     expect((res.body as Envelope).code).toBe('direct_school');
     expect(
@@ -245,7 +276,7 @@ describe('School Admin accounts (e2e)', () => {
     await http()
       .post('/api/v1/super/schools/999999999/admins')
       .set(as('super'))
-      .send({ name: 'N', email: email('n'), password: 'secret-123' })
+      .send({ name: 'N', email: email('n'), password: 'Secret-123' })
       .expect(404);
     // An admin of another school.
     await http()
@@ -274,7 +305,7 @@ describe('School Admin accounts (e2e)', () => {
       await http()
         .post(base(schoolA))
         .set(as(who))
-        .send({ name: 'Z', email: email(`z-${who}`), password: 'secret-123' })
+        .send({ name: 'Z', email: email(`z-${who}`), password: 'Secret-123' })
         .expect(403);
       await http()
         .post(`${base(schoolA)}/${created.id}/toggle`)
@@ -285,7 +316,7 @@ describe('School Admin accounts (e2e)', () => {
 
   it('edits the account; a new password ends its sessions', async () => {
     const tok = (
-      (await login(email('new'), 'secret-123').expect(200)).body as Envelope<{
+      (await login(email('new'), 'Secret-123').expect(200)).body as Envelope<{
         token: string;
       }>
     ).data.token;
@@ -320,17 +351,17 @@ describe('School Admin accounts (e2e)', () => {
       .send({
         name: 'Renamed Admin',
         email: email('new'),
-        password: 'another-456',
+        password: 'Another-456',
       })
       .expect(200);
     await http().get('/api/v1/auth/me').set(auth).expect(401);
-    await login(email('new'), 'secret-123').expect(422);
-    await login(email('new'), 'another-456').expect(200);
+    await login(email('new'), 'Secret-123').expect(422);
+    await login(email('new'), 'Another-456').expect(200);
   });
 
   it('deactivates (signing out, blocking sign-in) and reactivates', async () => {
     const tok = (
-      (await login(email('new'), 'another-456').expect(200)).body as Envelope<{
+      (await login(email('new'), 'Another-456').expect(200)).body as Envelope<{
         token: string;
       }>
     ).data.token;
@@ -345,7 +376,7 @@ describe('School Admin accounts (e2e)', () => {
       .get('/api/v1/auth/me')
       .set({ Authorization: `Bearer ${tok}` })
       .expect(401);
-    const refused = await login(email('new'), 'another-456');
+    const refused = await login(email('new'), 'Another-456');
     expect(refused.status).toBe(403);
 
     const on = await http()
@@ -355,6 +386,6 @@ describe('School Admin accounts (e2e)', () => {
     expect((on.body as Envelope<{ status: string }>).data.status).toBe(
       'active',
     );
-    await login(email('new'), 'another-456').expect(200);
+    await login(email('new'), 'Another-456').expect(200);
   });
 });

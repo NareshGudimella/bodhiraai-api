@@ -163,7 +163,7 @@ describe('Audit fixes (e2e)', () => {
   describe('phone OTP', () => {
     let phoneN = 0;
     const phone = () =>
-      `+9198${tag.replace(/\D/g, '1')}${String(++phoneN).padStart(4, '0')}`;
+      `98${String(parseInt(tag, 16)).padStart(4, '0').slice(-4)}${String(++phoneN).padStart(4, '0')}`;
 
     it('a new send does not reset the wrong-code counter', async () => {
       const u = await mkUser('student', { phone: phone() });
@@ -269,7 +269,7 @@ describe('Audit fixes (e2e)', () => {
       await http()
         .patch(`/api/v1/admin/users/${peer.id}`)
         .set(bearer(t))
-        .send({ name: 'Hijacked', role: 'admin', password: 'newpass123' })
+        .send({ name: 'Hijacked', role: 'admin', password: 'Newpass-123' })
         .expect(403);
       await http()
         .post(`/api/v1/admin/users/${peer.id}/toggle`)
@@ -296,7 +296,7 @@ describe('Audit fixes (e2e)', () => {
       await http()
         .patch(`/api/v1/admin/users/${student.id}`)
         .set(bearer(await tokenFor(admin)))
-        .send({ name: student.name, role: 'student', password: 'newpass123' })
+        .send({ name: student.name, role: 'student', password: 'Newpass-123' })
         .expect(200);
       expect(await tokenCount(student)).toBe(0);
     });
@@ -312,7 +312,7 @@ describe('Audit fixes (e2e)', () => {
           phone: null,
           gender: null,
           dob: null,
-          password: 'newpass123',
+          password: 'Newpass-123',
           roll_no: null,
         });
       expect(await tokenCount(student)).toBe(0);

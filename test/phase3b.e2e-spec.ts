@@ -89,8 +89,8 @@ describe('Assignments, account, roster (e2e)', () => {
       .set(as('student'))
       .send({
         current_password: 'nope',
-        password: 'abcdefgh1',
-        password_confirmation: 'abcdefgh1',
+        password: 'Abcdefgh-1',
+        password_confirmation: 'Abcdefgh-1',
       })
       .expect(422);
     expect(res.body.errors).toEqual({

@@ -1,3 +1,4 @@
+import { NEW_PASSWORD_RULES } from '../common/http/rules';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { asc, eq } from 'drizzle-orm';
@@ -62,7 +63,7 @@ export class PasswordResetService {
    */
   async sendLink(body: unknown): Promise<string> {
     const { email } = (await laravelValidate(this.db, body, {
-      email: ['required', 'email'],
+      email: ['required', 'email', 'max:160'],
     })) as { email: string };
     const user = await this.user(email);
     // Looked up for unknown addresses too, so every answer does the same work.
@@ -137,9 +138,9 @@ export class PasswordResetService {
   /** Password::reset(): checks the token, sets the password, rotates remember_token, deletes the token. */
   async reset(body: unknown): Promise<string> {
     const data = (await laravelValidate(this.db, body, {
-      token: ['required'],
-      email: ['required', 'email'],
-      password: ['required', 'min:8', 'confirmed'],
+      token: ['required', 'string', 'max:255'],
+      email: ['required', 'email', 'max:160'],
+      password: ['required', 'string', ...NEW_PASSWORD_RULES, 'confirmed'],
     })) as { token: string; email: string; password: string };
 
     const user = await this.user(data.email);

@@ -1,3 +1,4 @@
+import { NEW_PASSWORD_RULES } from '../common/http/rules';
 import {
   Body,
   Controller,
@@ -46,7 +47,7 @@ const studentRules = (ignoreId?: bigint) => ({
     'max:255',
     `unique:users,email${ignoreId ? `,${ignoreId}` : ''}`,
   ],
-  password: ['nullable', 'string', 'min:6'],
+  password: ['nullable', 'string', ...NEW_PASSWORD_RULES],
 });
 
 const AVATAR = { field: 'avatar', kind: 'image' as const, maxKb: 4096 };

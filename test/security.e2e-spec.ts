@@ -78,7 +78,7 @@ describe('Security hardening (e2e)', () => {
       .values({
         name: `Sec ${role} ${n}`,
         email: `sec-${tag}-${n}@bodhira.test`,
-        password: await hashPassword('password123'),
+        password: await hashPassword('Password-123'),
         role,
         school_id: schoolId,
         status: 'active',
@@ -148,8 +148,8 @@ describe('Security hardening (e2e)', () => {
     const body = (role: string, i: number, extra = {}) => ({
       name: `Reg ${role} ${i}`,
       email: `reg-${tag}-${role}-${i}@bodhira.test`,
-      password: 'password123',
-      password_confirmation: 'password123',
+      password: 'Password-123',
+      password_confirmation: 'Password-123',
       role,
       ...extra,
     });
@@ -258,13 +258,23 @@ describe('Security hardening (e2e)', () => {
         .expect(422);
       expect(stu.body.errors.role[0]).toMatch(/Student limit reached/);
     });
+
+    it('signs in with a +91-prefixed phone, finding the 10-digit user', async () => {
+      const u = await mkUser('student', {
+        phone: `97${String(parseInt(tag, 16)).padStart(4, '0').slice(-4)}0001`,
+      });
+      await http()
+        .post('/api/v1/auth/login')
+        .send({ identifier: `+91 ${u.phone}`, password: 'Password-123' })
+        .expect(200);
+    });
   });
 
   // ---------------------------------------------------------------- 2
   describe('phone OTP', () => {
     let phoneN = 0;
     const phone = () =>
-      `+9199${tag.replace(/\D/g, '1')}${String(++phoneN).padStart(4, '0')}`;
+      `99${String(parseInt(tag, 16)).padStart(4, '0').slice(-4)}${String(++phoneN).padStart(4, '0')}`;
     const withOtp = async (u: User, code = '123456') => {
       await db
         .update(users)
@@ -341,7 +351,7 @@ describe('Security hardening (e2e)', () => {
         expect(calls[0].authkey).toBe('msg91-auth');
         expect(q.get('template_id')).toBe('tmpl42');
         expect(q.get('sender')).toBe('BODHRA');
-        expect(q.get('mobile')).toBe(u.phone!.replace(/\D/g, ''));
+        expect(q.get('mobile')).toBe(`91${u.phone}`);
         // The SMS'd code signs in.
         const verified = await http()
           .post('/api/v1/auth/otp/verify')
@@ -552,13 +562,13 @@ describe('Security hardening (e2e)', () => {
       const keep = await tokenFor(u);
       const other1 = await tokenFor(u, 'web');
       const other2 = await tokenFor(u, 'ios');
-      const change = (current: string, next = 'newpassword1') =>
+      const change = (current: string, next = 'Newpassword-1') =>
         http().post('/api/v1/me/password').set(bearer(keep)).send({
           current_password: current,
           password: next,
           password_confirmation: next,
         });
-      await change('password123').expect(200);
+      await change('Password-123').expect(200);
       await http().get('/api/v1/auth/me').set(bearer(keep)).expect(200);
       await http().get('/api/v1/auth/me').set(bearer(other1)).expect(401);
       await http().get('/api/v1/auth/me').set(bearer(other2)).expect(401);
@@ -586,8 +596,8 @@ describe('Security hardening (e2e)', () => {
         .send({
           token: reset,
           email: u.email,
-          password: 'resetpassword1',
-          password_confirmation: 'resetpassword1',
+          password: 'Resetpassword-1',
+          password_confirmation: 'Resetpassword-1',
         })
         .expect(200);
       await http().get('/api/v1/auth/me').set(bearer(t1)).expect(401);

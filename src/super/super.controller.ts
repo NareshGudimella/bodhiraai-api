@@ -1,4 +1,10 @@
 import {
+  DATE_AFTER,
+  DATE_BEFORE,
+  ID_MAX,
+  PHONE_FORMAT,
+} from '../common/http/rules';
+import {
   Body,
   Controller,
   Get,
@@ -38,12 +44,12 @@ const PLANS = `in:${Object.keys(PLAN_PRICING).join(',')}`;
 const SCHOOL_RULES = {
   name: ['required', 'string', 'max:160'],
   email: ['nullable', 'email', 'max:160'],
-  phone: ['nullable', 'string', 'max:20'],
+  phone: ['nullable', 'string', 'max:20', PHONE_FORMAT],
   city: ['nullable', 'string', 'max:80'],
   state: ['nullable', 'string', 'max:80'],
   country: ['nullable', 'string', 'max:80'],
   plan: ['nullable', PLANS],
-  plan_expires_at: ['nullable', 'date'],
+  plan_expires_at: ['nullable', 'date', DATE_AFTER, DATE_BEFORE],
 };
 
 /** Web\SuperAdminController's school form: the API rules plus limits, syllabi and a logo. */
@@ -52,8 +58,8 @@ const WEB_SCHOOL_RULES = {
   max_teachers: ['nullable', 'integer', 'min:0', 'max:100000'],
   max_students: ['nullable', 'integer', 'min:0', 'max:1000000'],
   ai_daily_token_limit: ['nullable', 'integer', 'min:0', 'max:10000000'],
-  syllabi: ['nullable', 'array'],
-  'syllabi.*': ['integer', 'exists:syllabi,id'],
+  syllabi: ['nullable', 'array', 'max:200'],
+  'syllabi.*': ['integer', 'min:1', 'exists:syllabi,id'],
   logo: [],
 };
 
@@ -286,8 +292,8 @@ export class SuperController {
   @Get('video-sessions')
   async videoSessions(@Query() query: Record<string, unknown>) {
     const data = await laravelValidate(this.db, query, {
-      user: ['nullable', 'integer', 'min:1'],
-      lesson: ['nullable', 'integer', 'min:1'],
+      user: ['nullable', 'integer', 'min:1', `max:${ID_MAX}`],
+      lesson: ['nullable', 'integer', 'min:1', `max:${ID_MAX}`],
     });
     const perPage = 50;
     const page = pageFrom(query.page);

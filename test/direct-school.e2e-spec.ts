@@ -287,8 +287,8 @@ describe('Bodhira Direct and school content (e2e)', () => {
         .send({
           name: 'Direct Signup',
           email: `direct-signup-${tag}@bodhira.test`,
-          password: 'secret123',
-          password_confirmation: 'secret123',
+          password: 'Secret-123',
+          password_confirmation: 'Secret-123',
           syllabus_id: Number(sylX),
           plan_key: 'individual_premium',
           cycle: 'yearly',
@@ -331,8 +331,8 @@ describe('Bodhira Direct and school content (e2e)', () => {
         .send({
           name: 'Direct Plain',
           email: `direct-plain-${tag}@bodhira.test`,
-          password: 'secret123',
-          password_confirmation: 'secret123',
+          password: 'Secret-123',
+          password_confirmation: 'Secret-123',
           role: 'student',
         })
         .expect(201);
@@ -439,7 +439,7 @@ describe('Bodhira Direct and school content (e2e)', () => {
           name: 'Super Added',
           email: `direct-added-${tag}@bodhira.test`,
           role: 'student',
-          password: 'secret123',
+          password: 'Secret-123',
         })
         .expect(201);
       createdUsers.push(BigInt(created.body.data.id as number));

@@ -120,7 +120,7 @@ export class SiteImagesController {
     const data = await validateWithFiles(
       this.db,
       body,
-      { path: ['required', 'string'], image: ['nullable'] },
+      { path: ['required', 'string', 'max:255'], image: ['nullable'] },
       { image },
       [{ field: 'image', kind: 'image', maxKb: 10240 }],
     );

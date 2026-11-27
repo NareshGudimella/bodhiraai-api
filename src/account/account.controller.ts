@@ -1,4 +1,9 @@
 import {
+  CURRENT_PASSWORD_MAX,
+  PHONE_FORMAT,
+  NEW_PASSWORD_RULES,
+} from '../common/http/rules';
+import {
   Body,
   Controller,
   HttpCode,
@@ -35,8 +40,8 @@ import {
 /** Profile fields shared with the teacher roster forms. */
 export const PROFILE_RULES = {
   name: ['required', 'string', 'max:255'],
-  phone: ['nullable', 'string', 'max:30'],
-  dob: ['nullable', 'date', 'before:today'],
+  phone: ['nullable', 'string', 'max:30', PHONE_FORMAT],
+  dob: ['nullable', 'date', 'before:today', 'after:1900-01-01'],
   gender: ['nullable', 'in:male,female,other'],
 };
 
@@ -159,11 +164,12 @@ export class AccountController {
     let data: Record<string, unknown> = {};
     try {
       data = await laravelValidate(this.db, body, {
-        current_password: ['required'],
+        current_password: ['required', 'string', `max:${CURRENT_PASSWORD_MAX}`],
         password: [
           'required',
+          'string',
           'confirmed',
-          'min:8',
+          ...NEW_PASSWORD_RULES,
           'different:current_password',
         ],
       });

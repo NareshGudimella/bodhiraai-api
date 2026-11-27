@@ -1,3 +1,4 @@
+import { BODY_MAX, ID_MAX, IDS_MAX } from '../common/http/rules';
 import {
   Body,
   Controller,
@@ -332,8 +333,8 @@ export class CmsPagesController {
   async sectionReorder(@Param('page') slug: string, @Body() body: unknown) {
     const page = await this.page(slug);
     const data = await laravelValidate(this.db, body, {
-      ids: ['required', 'array'],
-      'ids.*': ['integer'],
+      ids: ['required', 'array', `max:${IDS_MAX}`],
+      'ids.*': ['integer', 'min:1', `max:${ID_MAX}`],
     });
     const ids = Object.values(data.ids as object) as (string | number)[];
     const now = new Date();
@@ -369,7 +370,7 @@ export class CmsPagesController {
       meta_description: ['nullable', 'string', 'max:320'],
       meta_keywords: ['nullable', 'string', 'max:320'],
       og_image: ['nullable', 'string', 'max:255'],
-      schema: ['nullable', 'string'],
+      schema: ['nullable', 'string', 'max:20000'],
       noindex: ['nullable', 'boolean'],
       sort_order: ['nullable', 'integer', 'min:0', 'max:9999'],
     });
@@ -411,10 +412,10 @@ export class CmsPagesController {
         eyebrow: ['nullable', 'string', 'max:160'],
         heading: ['nullable', 'string', 'max:255'],
         subheading: ['nullable', 'string', 'max:500'],
-        body: ['nullable', 'string'],
+        body: ['nullable', 'string', `max:${BODY_MAX}`],
         media_url: ['nullable', 'string', 'max:255'],
         media_file: ['nullable'],
-        data: ['nullable', 'string'],
+        data: ['nullable', 'string', `max:${BODY_MAX}`],
         is_active: ['nullable', 'boolean'],
       },
       { media_file: file },

@@ -1,3 +1,4 @@
+import { BODY_MAX, DESCRIPTION_MAX, URL_MAX } from '../common/http/rules';
 import {
   Body,
   Controller,
@@ -97,12 +98,12 @@ type Files = Partial<Record<'content_file' | 'thumbnail_file', IncomingFile[]>>;
 const LESSON_RULES = {
   title: ['required', 'string', 'max:160'],
   type: ['required', 'in:video,pdf,text'],
-  content_url: ['nullable', 'url'],
-  content_body: ['nullable', 'string'],
-  thumbnail: ['nullable', 'url'],
+  content_url: ['nullable', 'url', `max:${URL_MAX}`],
+  content_body: ['nullable', 'string', `max:${BODY_MAX}`],
+  thumbnail: ['nullable', 'url', `max:${URL_MAX}`],
   // Auto-extracted from the uploaded video by the form; a JPEG data URL.
   thumbnail_data: ['nullable', 'string', 'max:5000000'],
-  duration_sec: ['nullable', 'integer', 'min:0'],
+  duration_sec: ['nullable', 'integer', 'min:0', 'max:86400'],
   is_free: ['nullable', 'boolean'],
   is_published: ['nullable', 'boolean'],
 };
@@ -114,11 +115,11 @@ const LESSON_FILES = [
 
 const QUIZ_RULES = {
   title: ['required', 'string', 'max:160'],
-  description: ['nullable', 'string'],
+  description: ['nullable', 'string', `max:${DESCRIPTION_MAX}`],
   subject_id: ['nullable', 'exists:subjects,id'],
   chapter_id: ['nullable', 'exists:chapters,id'],
   duration_min: ['required', 'integer', 'min:1', 'max:300'],
-  pass_marks: ['nullable', 'integer', 'min:0'],
+  pass_marks: ['nullable', 'integer', 'min:0', 'max:10000'],
 };
 
 /**
@@ -207,7 +208,7 @@ export class ContentController {
     this.content.guardSubject(user, subject);
     const data = await laravelValidate(this.db, body, {
       title: ['required', 'string', 'max:160'],
-      description: ['nullable', 'string'],
+      description: ['nullable', 'string', `max:${DESCRIPTION_MAX}`],
       sort_order: ['nullable', 'integer', 'min:0', 'max:999'],
       is_published: ['nullable', 'boolean'],
     });
@@ -435,7 +436,7 @@ export class ContentController {
     const data = await laravelValidate(this.db, body, {
       filename: ['required', 'string', 'max:255'],
       size: ['required', 'integer', 'min:1'],
-      content_type: ['required', 'string'],
+      content_type: ['required', 'string', 'max:100'],
     });
     const filename = data.filename as string;
     const ext = (filename.split('.').pop() ?? '').toLowerCase();
@@ -796,13 +797,13 @@ export class ContentController {
     const quiz = await this.quiz(raw);
     this.content.guardQuiz(user, quiz);
     const data = await laravelValidate(this.db, body, {
-      body: ['required', 'string'],
+      body: ['required', 'string', 'max:5000'],
       type: ['required', 'in:mcq,tf,short'],
       marks: ['required', 'integer', 'min:1', 'max:50'],
-      options: ['nullable', 'array'],
+      options: ['nullable', 'array', 'max:10'],
       'options.*': ['nullable', 'string', 'max:240'],
-      correct_answer: ['required', 'string'],
-      explanation: ['nullable', 'string'],
+      correct_answer: ['required', 'string', 'max:500'],
+      explanation: ['nullable', 'string', 'max:2000'],
     });
     const q = await this.content.addQuestion(quiz, data);
     return ok({ id: q.id }, 'Question added.');

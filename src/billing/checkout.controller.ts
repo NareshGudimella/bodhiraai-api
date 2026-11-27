@@ -247,9 +247,9 @@ export class CheckoutController {
     const data = await laravelValidate(this.db, body, {
       cycle: ['required', `in:${CYCLES.join(',')}`],
       // Sent by the Razorpay JS handler. Optional in demo mode.
-      razorpay_payment_id: ['nullable', 'string'],
-      razorpay_order_id: ['nullable', 'string'],
-      razorpay_signature: ['nullable', 'string'],
+      razorpay_payment_id: ['nullable', 'string', 'max:255'],
+      razorpay_order_id: ['nullable', 'string', 'max:255'],
+      razorpay_signature: ['nullable', 'string', 'max:255'],
     });
 
     const plan = await this.planFor(sub);

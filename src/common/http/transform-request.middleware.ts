@@ -1,4 +1,5 @@
 import { Injectable, NestMiddleware } from '@nestjs/common';
+import { ValidationFailed } from './api.exception';
 import type { NextFunction, Request, Response } from 'express';
 
 /** TrimStrings::$except — matched against the dotted key, like Laravel. */
@@ -28,6 +29,37 @@ function clean(value: unknown, key: string): unknown {
 }
 
 /**
+ * security: not in legacy: no query-string value may exceed QUERY_MAX characters
+ * (QUERY_MAX_BY_KEY: signed tokens and paths), nor an array more than 50 items.
+ */
+export const QUERY_MAX = 200;
+const QUERY_MAX_BY_KEY: Record<string, number> = { t: 1000, path: 500 };
+
+function capQuery(
+  query: unknown,
+  key = '',
+  errors: Record<string, string[]> = {},
+) {
+  if (typeof query === 'string') {
+    const max = QUERY_MAX_BY_KEY[key.split('.').pop() ?? ''] ?? QUERY_MAX;
+    if ([...query].length > max)
+      errors[key] = [
+        `The ${key.replace(/_/g, ' ')} field must not be greater than ${max} characters.`,
+      ];
+  } else if (query && typeof query === 'object') {
+    const entries = Object.entries(query);
+    if (Array.isArray(query) && entries.length > 50)
+      errors[key] = [
+        `The ${key.replace(/_/g, ' ')} field must not have more than 50 items.`,
+      ];
+    else
+      for (const [k, v] of entries.slice(0, 50))
+        capQuery(v, key ? `${key}.${k}` : k, errors);
+  }
+  if (!key && Object.keys(errors).length) throw new ValidationFailed(errors);
+}
+
+/**
  * Laravel's default TrimStrings + ConvertEmptyStringsToNull middleware: every
  * input string is trimmed (passwords excepted) and '' becomes null before
  * validation, for the JSON body and the query string.
@@ -44,6 +76,7 @@ export class TransformRequestMiddleware implements NestMiddleware {
       req.body = clean(req.body, '');
     }
     const query = clean({ ...req.query }, '') as Request['query'];
+    capQuery(query);
     Object.defineProperty(req, 'query', { value: query, writable: true });
     next();
   }

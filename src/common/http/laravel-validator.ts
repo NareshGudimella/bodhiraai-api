@@ -1,3 +1,4 @@
+import { PASSWORD_RE } from './rules';
 import { sql, type SQL } from 'drizzle-orm';
 import type { Db } from '../../db/db';
 import { ValidationFailed } from './api.exception';
@@ -221,14 +222,29 @@ export async function laravelValidate(
           }
           break;
         case 'before': {
-          // Only `before:today` is used: the date must be earlier than today (UTC).
+          // `before:today` (UTC) or `before:YYYY-MM-DD`: the date must be earlier.
           const parsed =
             typeof value === 'string' ? parseLaravelDate(value) : null;
-          const today = new Date(
-            `${new Date().toISOString().slice(0, 10)}T00:00:00Z`,
-          );
-          if (!parsed || parsed.instant >= today) {
+          const limit =
+            arg === 'today'
+              ? new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`)
+              : new Date(`${arg}T00:00:00Z`);
+          // A literal bound leaves unparsable values to the `date` rule.
+          if (
+            arg === 'today'
+              ? !parsed || parsed.instant >= limit
+              : parsed && parsed.instant >= limit
+          ) {
             fail(`The ${label(field)} field must be a date before ${arg}.`);
+          }
+          break;
+        }
+        case 'after': {
+          // `after:YYYY-MM-DD` (UTC): the date must be later.
+          const parsed =
+            typeof value === 'string' ? parseLaravelDate(value) : null;
+          if (parsed && parsed.instant <= new Date(`${arg}T00:00:00Z`)) {
+            fail(`The ${label(field)} field must be a date after ${arg}.`);
           }
           break;
         }
@@ -280,6 +296,13 @@ export async function laravelValidate(
           }
           break;
         }
+        // security: not in legacy: the new-password policy (rules.ts PASSWORD_RE).
+        case 'password_strength':
+          if (!PASSWORD_RE.test(scalar(value)))
+            fail(
+              `The ${label(field)} must contain an uppercase letter, a lowercase letter, a digit and a symbol.`,
+            );
+          break;
         case 'boolean':
           if (![true, false, 0, 1, '0', '1'].includes(value as never)) {
             fail(`The ${label(field)} field must be true or false.`);

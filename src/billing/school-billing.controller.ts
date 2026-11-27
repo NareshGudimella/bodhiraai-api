@@ -192,7 +192,7 @@ export class SchoolBillingController {
     const data = await laravelValidate(this.db, body, {
       plan: ['required', PLANS],
       days: ['required', 'integer', 'min:1', 'max:730'],
-      amount_paise: ['required', 'integer', 'min:0'],
+      amount_paise: ['required', 'integer', 'min:0', 'max:100000000'],
       note: ['nullable', 'string', 'max:255'],
     });
     const plan = data.plan as string;

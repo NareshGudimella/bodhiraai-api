@@ -1,3 +1,4 @@
+import { pageFrom } from '../common/http/paginate';
 import {
   Controller,
   Get,
@@ -43,8 +44,7 @@ export class NotificationController {
   /** `$user->notifications()->paginate(25)`: newest first, `?page=` like Laravel. */
   @Get()
   async index(@CurrentUser() user: users, @Query('page') rawPage?: string) {
-    const page =
-      /^\d+$/.test(rawPage ?? '') && Number(rawPage) > 0 ? Number(rawPage) : 1;
+    const page = pageFrom(rawPage);
     const where = this.mine(user);
     const [rows, total, unread] = await Promise.all([
       this.db.query.notifications.findMany({

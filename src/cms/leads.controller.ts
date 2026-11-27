@@ -1,3 +1,4 @@
+import { PHONE_FORMAT } from '../common/http/rules';
 import { Body, Controller, Inject, Logger, Post } from '@nestjs/common';
 import { asc, eq } from 'drizzle-orm';
 import { Public } from '../common/decorators/auth.decorators';
@@ -35,7 +36,7 @@ export class LeadsController {
     const data = await laravelValidate(this.db, body, {
       name: ['required', 'string', 'max:160'],
       email: ['required', 'email', 'max:200'],
-      phone: ['nullable', 'string', 'max:40'],
+      phone: ['nullable', 'string', 'max:40', PHONE_FORMAT],
       subject: ['nullable', 'string', 'max:200'],
       message: ['nullable', 'string', 'max:5000'],
     });
@@ -110,7 +111,7 @@ export class LeadsController {
     const data = await laravelValidate(this.db, body, {
       name: ['required', 'string', 'max:120'],
       email: ['required', 'email', 'max:160'],
-      phone: ['required', 'string', 'max:20'],
+      phone: ['required', 'string', 'max:20', PHONE_FORMAT],
       grade: ['nullable', 'string', 'max:20'],
       board: ['nullable', 'string', 'max:40'],
       city: ['nullable', 'string', 'max:80'],
@@ -137,7 +138,7 @@ export class LeadsController {
       type: ['required', 'in:school,student'],
       name: ['required', 'string', 'max:120'],
       email: ['required', 'email', 'max:160'],
-      phone: ['required', 'string', 'max:20'],
+      phone: ['required', 'string', 'max:20', PHONE_FORMAT],
       city: ['nullable', 'string', 'max:80'],
       board: ['nullable', 'string', 'max:40'],
       message: ['nullable', 'string', 'max:1000'],
